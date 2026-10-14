@@ -1,0 +1,10 @@
+# HTTPS automático (Let's Encrypt). DOMAIN vem do .env, ex.: app.operix.com.br
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy web:3000
+}
+
+# Redireciona www para o domínio principal (opcional)
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}
