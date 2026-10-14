@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: operix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-operix}
+      POSTGRES_DB: operix
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U operix"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://operix:${POSTGRES_PASSWORD:-operix}@db:5432/operix
+      REDIS_URL: redis://redis:6379/0
+      APP_NAME: ${BRAND_NAME:-Operix}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    ports: ["127.0.0.1:8000:8000"]  # só local; o público acessa pelo web (/api/*)
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.engine.worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://operix:${POSTGRES_PASSWORD:-operix}@db:5432/operix
+      REDIS_URL: redis://redis:6379/0
+      APP_NAME: ${BRAND_NAME:-Operix}
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    restart: unless-stopped
+
+  web:
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_BRAND_NAME: ${BRAND_NAME:-Operix}
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on: [api]
+    ports: ["127.0.0.1:3000:3000"]  # só local; o público acessa pelo Caddy (HTTPS)
+
+volumes:
+  pgdata:
+  redisdata:

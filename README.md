@@ -1,0 +1,121 @@
+# Operix
+
+Plataforma de robôs de negociação para **cripto** (Binance Spot) e **forex** (qualquer corretora com cTrader), pelas APIs oficiais, vendida por assinatura mensal no Mercado Pago. Cada cliente opera com as próprias credenciais.
+Arquitetura, modelo de dados e decisões de segurança: [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
+
+## O que já funciona
+
+- **Assinante**: cadastro, login com 2FA (TOTP), planos e assinatura recorrente, conexão de chaves da Binance (cifradas), criação e controle de robôs, caixa de sinais, histórico de ordens, termo de risco, troca de senha e exclusão de conta (LGPD).
+- **Robôs**: 4 estratégias (2 de day trade, 2 de swing trade), modalidade **automática** ou **por sinais**, e três ambientes: **simulação** (preço real, saldo fictício), **testnet/conta demo** e **conta real**.
+- **Forex (cTrader)**: opera comprado e vendido, tamanho em lotes, stop e alvo enviados à corretora junto com a ordem, horário de mercado respeitado e fechamentos feitos pela corretora (stop, alvo, stop-out) reconciliados automaticamente.
+- **Risco**: stop loss, alvo, tempo máximo posicionado, perda máxima diária (pausa o robô), limite de ordens por dia, botão de encerrar posição e parada geral (kill switch) do admin.
+- **Backtest**: testa qualquer estratégia (ou a configuração de um robô) no histórico da Binance, sem olhar o futuro, com taxa e slippage. Mostra taxa de acerto, resultado médio por operação, ganho médio ÷ perda média, fator de lucro, queda máxima, comparação com comprar e segurar, resultado mês a mês e as operações no gráfico de candles.
+- **Gráficos TradingView**: gráfico avançado do TradingView na tela de cada robô e gráfico de candles (TradingView Lightweight Charts) com compras e vendas marcadas no backtest.
+- **Admin**: receita recorrente, usuários (suspender, conceder plano de cortesia), assinaturas, planos, robôs, parada geral, auditoria e reprocessamento de webhooks.
+- **Segurança**: Argon2id, JWT em cookie httpOnly com CSRF, AES-256-GCM com rotação de chave, recusa de chave com saque, rate limit, cabeçalhos de segurança, auditoria, webhook com HMAC e idempotência de ordens.
+
+## Produção
+
+Passo a passo completo em [`DEPLOY.md`](DEPLOY.md): servidor, domínio, HTTPS automático (Caddy), Mercado Pago, backup e atualização.
+
+## Rodar com Docker (desenvolvimento)
+
+```bash
+cp .env.example .env          # preencha JWT_SECRET, ENCRYPTION_KEYS, MP_*, ADMIN_*
+docker compose up -d --build
+docker compose exec api python -m app.seed      # cria planos e o admin
+```
+
+Abra http://localhost:3000. O admin precisa ativar o 2FA em **Segurança** antes de acessar `/admin`.
+
+## Rodar sem Docker (desenvolvimento)
+
+```bash
+# API
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+export DATABASE_URL=sqlite+aiosqlite:///./dev.db REDIS_URL=memory:// ADMIN_EMAIL=admin@local ADMIN_PASSWORD=TroqueEsta123
+python -m app.seed
+uvicorn app.main:app --reload            # http://localhost:8000/docs
+python -m app.engine.worker              # em outro terminal (robôs)
+
+# Painel
+cd frontend
+npm install
+npm run dev                              # http://localhost:3000
+```
+
+`REDIS_URL=memory://` só serve para um processo; com API e worker separados, use Redis de verdade.
+
+## Testes
+
+```bash
+cd backend && pytest        # 39 testes: segurança, webhook, Binance, cTrader (servidor simulado), estratégias, motor, backtest e API
+cd frontend && npm run build
+```
+
+## Mercado Pago
+
+1. Em *Suas integrações*, crie a aplicação e copie o **Access Token** para `MP_ACCESS_TOKEN`.
+2. Em **Webhooks**, cadastre `https://SEU_DOMINIO/api/v1/billing/webhook/mercadopago` com os eventos **Planos e assinaturas** (`subscription_preapproval` e `subscription_authorized_payment`) e copie a **assinatura secreta** para `MP_WEBHOOK_SECRET`.
+3. Teste com credenciais e usuários de teste antes de usar as de produção.
+
+As assinaturas recorrentes do Mercado Pago são cobradas no cartão. O webhook valida a assinatura HMAC, responde 200 na hora e consulta o estado real no MP antes de ativar ou pausar.
+
+## Binance
+
+- **Testnet**: crie chaves em https://testnet.binance.vision e cadastre como "Testnet".
+- **Conta real**: o assinante cria a chave com leitura + negociação Spot, **sem saque** e com restrição ao IP do servidor (informe esse IP no painel/FAQ). A plataforma recusa chaves com saque habilitado.
+- O worker usa dados públicos da Binance; se o servidor estiver em região bloqueada pela Binance, hospede em região permitida.
+
+## Forex com cTrader
+
+Cada cliente conecta a própria conta em **Corretora**, de um destes jeitos:
+
+1. **App próprio (padrão):** o cliente cria um app em https://openapi.ctrader.com/apps, gera no Playground do app o Access Token e o Refresh Token (escopo *trading*) e cola no painel Client ID, Client Secret e os dois tokens. Tudo fica cifrado (AES-256-GCM) por credencial.
+2. **Login com cTrader (opcional):** se você registrar um app da plataforma e preencher `CTRADER_CLIENT_ID` e `CTRADER_CLIENT_SECRET`, aparece o botão "Conectar com cTrader". O redirect a cadastrar no app é `{API_PUBLIC_URL}/api/v1/ctrader/callback`.
+
+Detalhes técnicos:
+- Conexão JSON por WebSocket na porta 5036 (`demo.ctraderapi.com` e `live.ctraderapi.com`), com heartbeat a cada 10 s e uma conexão compartilhada por app e ambiente.
+- O token de acesso vale cerca de 30 dias; o sistema renova com o refresh token alguns dias antes, sob trava no Redis, e atualiza todas as contas que dividiam o mesmo token.
+- A simulação de forex usa a conta cTrader do cliente só para cotações e regras do símbolo (tamanho do lote, volume mínimo, horário).
+- Robôs de forex em conta real dependem da alavancagem da corretora: confira os limites de risco antes de ligar.
+
+## TradingView
+
+- **Tela do robô**: widget gratuito *Advanced Chart* do TradingView (`components/TradingViewWidget.tsx`), com o par `BINANCE:<PAR>` e o tempo gráfico do robô. Os dados vêm do próprio TradingView; mantenha o link de crédito abaixo do gráfico.
+- **Backtest**: `lightweight-charts` (biblioteca open source do TradingView, licença Apache 2.0) desenha os candles usados no teste com as compras e vendas. O logotipo do TradingView no canto do gráfico é a atribuição exigida pela licença.
+- A política de segurança (CSP) em `frontend/next.config.mjs` já libera `s3.tradingview.com` e os iframes do TradingView.
+
+## Nome da plataforma
+
+O nome **Operix** fica em um lugar só: `BRAND_NAME` no `.env` (usado no build do painel e como `APP_NAME` da API). Antes de lançar, confirme o registro da marca no INPI (classes 9, 36 e 42) e o domínio.
+
+## Antes de lançar
+
+- [ ] Validar com advogado o enquadramento regulatório (CVM 19/20/21), os termos de uso, a política de privacidade e o material de divulgação. Não prometa rentabilidade. No forex, não divulgue nem receba comissão de corretoras estrangeiras sem orientação jurídica.
+- [ ] Usar `ENVIRONMENT=production` (as migrações do Alembic rodam sozinhas no deploy).
+- [ ] Subir com `docker-compose.prod.yml` (HTTPS pelo Caddy) e agendar `deploy/backup.sh`.
+- [ ] Guardar `ENCRYPTION_KEYS` fora do servidor: sem ela as chaves cadastradas ficam ilegíveis.
+- [ ] Monitoramento (Sentry, alerta de worker parado, alerta de webhook com falha).
+- [ ] Rodar robôs em testnet por algumas semanas antes de liberar conta real.
+
+## Estrutura
+
+```
+backend/
+  app/
+    api/routes/        auth, billing (MP), credentials, ctrader, bots e sinais, backtest, admin
+    core/              config, segurança, criptografia, Redis, rate limit
+    engine/            worker, ciclo do robô, executor de ordens, risco, permissões
+    services/brokers/  Binance (REST oficial), cTrader (Open API JSON), simulação, fábrica
+    strategies/        indicadores e estratégias
+    models.py          tabelas
+  tests/
+frontend/
+  app/painel/          painel do assinante
+  app/admin/           painel do administrador
+docs/ARQUITETURA.md
+docker-compose.yml
+```

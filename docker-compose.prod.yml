@@ -1,0 +1,22 @@
+# Produção: soma este arquivo ao docker-compose.yml
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  api:
+    # Aplica as migrações do banco a cada deploy, antes de abrir a API.
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      DOMAIN: ${DOMAIN:?Defina DOMAIN no .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+
+volumes:
+  caddy_data:
+  caddy_config:
