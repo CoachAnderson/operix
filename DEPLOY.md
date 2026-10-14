@@ -1,4 +1,4 @@
-# Subir o Operix em produção
+# Subir o OráculoInvest em produção
 
 Caminho recomendado para começar: **um servidor Linux (VPS) com Docker**, HTTPS automático pelo Caddy.
 Tudo roda no mesmo servidor: PostgreSQL, Redis, API, robôs (worker) e painel.

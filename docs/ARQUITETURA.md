@@ -1,4 +1,4 @@
-# Operix — Arquitetura
+# OráculoInvest — Arquitetura
 
 Plataforma de robôs de negociação para cripto (Binance) e forex (cTrader), pelas APIs oficiais, vendida por assinatura mensal no Mercado Pago.
 

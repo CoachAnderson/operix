@@ -1,4 +1,4 @@
-# Operix
+# OráculoInvest
 
 Plataforma de robôs de negociação para **cripto** (Binance Spot) e **forex** (qualquer corretora com cTrader), pelas APIs oficiais, vendida por assinatura mensal no Mercado Pago. Cada cliente opera com as próprias credenciais.
 Arquitetura, modelo de dados e decisões de segurança: [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
@@ -90,7 +90,7 @@ Detalhes técnicos:
 
 ## Nome da plataforma
 
-O nome **Operix** fica em um lugar só: `BRAND_NAME` no `.env` (usado no build do painel e como `APP_NAME` da API). Antes de lançar, confirme o registro da marca no INPI (classes 9, 36 e 42) e o domínio.
+O nome **OráculoInvest** fica em um lugar só: `BRAND_NAME` no `.env` (usado no build do painel e como `APP_NAME` da API). Antes de lançar, confirme o registro da marca no INPI (classes 9, 36 e 42) e o domínio.
 
 ## Antes de lançar
 
