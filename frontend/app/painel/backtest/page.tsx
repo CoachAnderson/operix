@@ -324,6 +324,20 @@ function BacktestView() {
 
         <div>{result ? <ResultView r={result} /> : <EmptyResult />}</div>
       </div>
+      {result && result.ohlc?.length > 1 && (
+        <section className="section">
+          <CandleChart
+            ohlc={result.ohlc}
+            trades={result.trades}
+            heading={
+              <div style={{ display: "grid", gap: 4 }}>
+                <h2>Operações no gráfico</h2>
+                <p className="muted small">C marca entrada comprada e V entrada vendida; a marca de saída mostra o resultado. Arraste para navegar e use a rolagem para aproximar.</p>
+              </div>
+            }
+          />
+        </section>
+      )}
     </>
   );
 }
@@ -411,14 +425,6 @@ function ResultView({ r }: { r: Result }) {
           <h2>Evolução do saldo</h2>
           <EquityChart points={r.equity} initial={r.config.initial_balance} />
           <p className="muted small">Taxas pagas no período: {money(m.fees_total)}{unit}. {r.candles.toLocaleString("pt-BR")} candles analisados.</p>
-        </section>
-      )}
-
-      {r.ohlc?.length > 1 && (
-        <section style={{ display: "grid", gap: 10 }}>
-          <h2>Operações no gráfico</h2>
-          <p className="muted small">C marca entrada comprada e V entrada vendida; a marca de saída mostra o resultado. Arraste para navegar e use a rolagem para aproximar.</p>
-          <CandleChart ohlc={r.ohlc} trades={r.trades} />
         </section>
       )}
 

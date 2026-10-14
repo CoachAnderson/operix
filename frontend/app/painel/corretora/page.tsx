@@ -6,6 +6,7 @@ import { ErrorText, Loading, PageHead, VenueTag, useAction, useApi } from "@/com
 import { api } from "@/lib/api";
 import { date } from "@/lib/format";
 import type { Credential } from "@/lib/types";
+import { BinanceSignup } from "@/components/BinanceSignup";
 
 function BrokerView() {
   const back = useSearchParams().get("ctrader");
@@ -150,6 +151,11 @@ function BrokerView() {
 
       <section className="section">
         <h2 style={{ marginBottom: 12 }}>Cripto com Binance</h2>
+        {!list.data?.some((c) => c.exchange === "binance") && (
+          <div style={{ marginBottom: 16, maxWidth: 560 }}>
+            <BinanceSignup />
+          </div>
+        )}
         <form className="form panel" onSubmit={addBinance}>
           <div className="choice">
             <label>

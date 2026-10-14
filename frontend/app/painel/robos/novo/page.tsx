@@ -8,6 +8,7 @@ import { ErrorText, Loading, PageHead, useAction, useApi } from "@/components/ui
 import { api } from "@/lib/api";
 import { VENUE_HINT, venueLabel } from "@/lib/format";
 import type { Bot, Credential, ExecMode, Market, StrategyInfo, Subscription, Venue } from "@/lib/types";
+import { BinanceSignup } from "@/components/BinanceSignup";
 
 const DEFAULT_SYMBOL: Record<Market, string> = { crypto: "BTCUSDT", forex: "EURUSD" };
 
@@ -242,6 +243,12 @@ export default function NewBotPage() {
               <p className="notice small">
                 Nenhuma {forex ? "conta cTrader" : `chave de ${venueLabel(form.venue).toLowerCase()}`} conectada para este ambiente.{" "}
                 <Link href="/painel/corretora">Conectar corretora</Link>
+                {!forex && form.venue === "live" && (
+                  <>
+                    {" "}
+                    <BinanceSignup compact />
+                  </>
+                )}
               </p>
             ))}
           {form.venue === "live" && (

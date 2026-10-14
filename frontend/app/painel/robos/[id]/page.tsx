@@ -150,9 +150,8 @@ export default function BotDetailPage() {
         )}
       </dl>
 
-      <section className="section" style={{ display: "grid", gap: 10 }}>
-        <h2>Gráfico</h2>
-        <TradingViewWidget symbol={b.symbol} market={b.market} timeframe={String(b.params.timeframe ?? "1h")} strategy={b.strategy} />
+      <section className="section">
+        <TradingViewWidget heading={<h2>Gráfico</h2>} symbol={b.symbol} market={b.market} timeframe={String(b.params.timeframe ?? "1h")} strategy={b.strategy} />
       </section>
 
       <section className="section">

@@ -6,6 +6,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Signal, User } from "@/lib/types";
 import { BRAND } from "@/lib/brand";
+import { Logo } from "@/components/Logo";
 
 const UserContext = createContext<{ user: User; refresh: () => Promise<void> } | null>(null);
 
@@ -92,8 +93,8 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
     <UserContext.Provider value={{ user, refresh }}>
       <div className="shell">
         <aside className="sidebar">
-          <Link href={`/${area}`} className="brand">
-            {BRAND}{area === "admin" ? " admin" : ""}
+          <Link href={`/${area}`} className="brand" aria-label={`${BRAND}${area === "admin" ? ", administração" : ", início"}`}>
+            <Logo height={26} suffix={area === "admin" ? "admin" : undefined} />
           </Link>
           <nav className="nav" aria-label="Navegação principal">
             {items.map((i) => (

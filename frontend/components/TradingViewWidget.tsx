@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { FullscreenFrame } from "./FullscreenFrame";
 
 /** Mapa do tempo gráfico do robô para o formato do TradingView. */
 const TV_INTERVAL: Record<string, string> = { "1m": "1", "5m": "5", "15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D" };
@@ -13,7 +14,7 @@ const STUDIES: Record<string, string[]> = {
  * Gráfico avançado do TradingView (widget gratuito, dados do próprio TradingView: BINANCE:<par> ou FX:<par>).
  * Mostra o mercado com todas as ferramentas do TradingView; as ordens do robô ficam na tabela abaixo.
  */
-export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h", strategy, height = 480 }: { symbol: string; market?: "crypto" | "forex"; timeframe?: string; strategy?: string; height?: number }) {
+export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h", strategy, heading }: { symbol: string; market?: "crypto" | "forex"; timeframe?: string; strategy?: string; heading?: React.ReactNode }) {
   // Forex: cotação agregada do TradingView (FX:). As cotações da sua corretora podem diferir alguns pontos.
   const tvSymbol = market === "forex" ? `FX:${symbol}` : `BINANCE:${symbol}`;
   const box = useRef<HTMLDivElement>(null);
@@ -57,7 +58,9 @@ export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h",
 
   return (
     <div className="tv-wrap">
-      <div className="tradingview-widget-container" ref={box} style={{ height, width: "100%" }} />
+      <FullscreenFrame title={`${symbol} no TradingView`} heading={heading}>
+        {() => <div className="tradingview-widget-container chart-box chart-box-tv" ref={box} />}
+      </FullscreenFrame>
       <p className="muted small tv-credit">
         Gráfico por{" "}
         <a href={`https://br.tradingview.com/symbols/${tvSymbol.replace(":", "-")}/`} rel="noopener nofollow" target="_blank">

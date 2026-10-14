@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { BRAND } from "@/lib/brand";
+import { Logo } from "@/components/Logo";
 
 export const metadata = { title: `Termos de uso — ${BRAND}` };
 
 export default function Terms() {
   return (
     <main className="landing" style={{ display: "grid", gap: 16 }}>
-      <Link href="/" className="brand">{BRAND}</Link>
+      <Link href="/" className="brand" aria-label={`${BRAND}, início`}><Logo height={28} /></Link>
       <h1>Termos de uso</h1>
       <div className="notice">
         <strong>Modelo a ser revisado por advogado</strong>

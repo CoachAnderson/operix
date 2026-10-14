@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ErrorText, useAction } from "@/components/ui";
 import { api } from "@/lib/api";
+import { Logo } from "@/components/Logo";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -22,6 +23,7 @@ export default function RegisterPage() {
   return (
     <div className="auth">
       <form className="panel" onSubmit={submit}>
+        <Logo height={30} />
         <h1>Criar conta</h1>
         <label>
           Nome

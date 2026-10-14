@@ -6,6 +6,7 @@ import { Suspense, useState } from "react";
 import { ErrorText, useAction } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
 import type { User } from "@/lib/types";
+import { Logo } from "@/components/Logo";
 
 function LoginForm() {
   const router = useRouter();
@@ -40,6 +41,7 @@ function LoginForm() {
 
   return (
     <form className="panel" onSubmit={submit}>
+      <Logo height={30} />
       <h1>Entrar</h1>
       {!needsCode ? (
         <>

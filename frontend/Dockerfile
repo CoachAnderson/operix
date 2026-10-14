@@ -14,6 +14,9 @@ ENV BACKEND_URL=$BACKEND_URL
 # Nome da plataforma exibido no painel
 ARG NEXT_PUBLIC_BRAND_NAME=OráculoInvest
 ENV NEXT_PUBLIC_BRAND_NAME=$NEXT_PUBLIC_BRAND_NAME
+# Link de indicação da Binance (vazio = não mostra)
+ARG NEXT_PUBLIC_BINANCE_REF_URL=https://www.binance.com/register?ref=65851965
+ENV NEXT_PUBLIC_BINANCE_REF_URL=$NEXT_PUBLIC_BINANCE_REF_URL
 RUN npm run build
 
 FROM node:22-alpine

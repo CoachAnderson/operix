@@ -50,6 +50,7 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_BRAND_NAME: ${BRAND_NAME:-OráculoInvest}
+        NEXT_PUBLIC_BINANCE_REF_URL: ${BINANCE_REF_URL-https://www.binance.com/register?ref=65851965}
     environment:
       BACKEND_URL: http://api:8000
     depends_on: [api]

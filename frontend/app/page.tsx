@@ -7,6 +7,7 @@ import { Stripe, useApi } from "@/components/ui";
 import { VENUE_HINT, VENUE_LABEL } from "@/lib/format";
 import type { Plan, Venue } from "@/lib/types";
 import { BRAND } from "@/lib/brand";
+import { Logo } from "@/components/Logo";
 
 const DEMO: Venue[] = ["paper", "testnet", "live"];
 
@@ -17,7 +18,7 @@ export default function Home() {
   return (
     <div className="landing">
       <header className="landing-top">
-        <span className="brand">{BRAND}</span>
+        <span className="brand"><Logo height={34} /></span>
         <div className="actions">
           <Link className="btn btn-quiet" href="/entrar">Entrar</Link>
           <Link className="btn btn-primary" href="/cadastro">Criar conta</Link>

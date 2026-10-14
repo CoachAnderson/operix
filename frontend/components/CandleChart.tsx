@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { money } from "@/lib/format";
+import { FullscreenFrame } from "./FullscreenFrame";
 
 export type OHLC = [number, number, number, number, number]; // tempo (ms), abertura, máxima, mínima, fechamento
 export interface ChartTrade {
@@ -22,7 +23,7 @@ function cssVar(name: string): string {
  * Candles com as entradas e saídas marcadas, usando TradingView Lightweight Charts (Apache 2.0).
  * O logotipo do TradingView no canto é a atribuição exigida pela licença; não remova.
  */
-export function CandleChart({ ohlc, trades, height = 420 }: { ohlc: OHLC[]; trades: ChartTrade[]; height?: number }) {
+export function CandleChart({ ohlc, trades, title = "Operações no gráfico", heading }: { ohlc: OHLC[]; trades: ChartTrade[]; title?: string; heading?: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,8 +48,7 @@ export function CandleChart({ ohlc, trades, height = 420 }: { ohlc: OHLC[]; trad
       const loss = cssVar("--loss");
 
       const chart = createChart(box.current, {
-        height,
-        autoSize: true,
+        autoSize: true, // acompanha o tamanho da caixa, inclusive em tela cheia
         layout: {
           background: { type: ColorType.Solid, color: cssVar("--surface") },
           textColor: muted,
@@ -104,11 +104,15 @@ export function CandleChart({ ohlc, trades, height = 420 }: { ohlc: OHLC[]; trad
       disposed = true;
       cleanup();
     };
-  }, [ohlc, trades, height]);
+  }, [ohlc, trades]);
 
   return (
-    <figure className="chart" style={{ padding: 0 }}>
-      <div ref={box} style={{ height, width: "100%" }} aria-label="Gráfico de candles com as entradas compradas (C), vendidas (V) e as saídas marcadas" role="img" />
-    </figure>
+    <FullscreenFrame title={title} heading={heading}>
+      {() => (
+        <figure className="chart" style={{ padding: 0, margin: 0, height: "100%" }}>
+          <div ref={box} className="chart-box chart-box-candles" aria-label="Gráfico de candles com as entradas compradas (C), vendidas (V) e as saídas marcadas" role="img" />
+        </figure>
+      )}
+    </FullscreenFrame>
   );
 }
