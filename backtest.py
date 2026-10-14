@@ -1,358 +1,201 @@
-"""Backtest: roda uma estratégia sobre candles históricos com as mesmas regras do robô ao vivo.
-
-Regras para não "olhar o futuro":
-- a estratégia decide no FECHAMENTO do candle i (só com candles até i);
-- a ordem é executada na ABERTURA do candle i+1 (como o robô ao vivo, que envia a mercado logo após o fechamento);
-- stop loss e alvo são checados dentro do candle pelas máximas/mínimas. Se os dois forem tocados no mesmo
-  candle, assume-se que o STOP veio primeiro (hipótese conservadora). Se o candle abrir além do nível
-  (gap), a execução é no preço de abertura;
-- taxas e slippage são cobrados em todas as entradas e saídas.
-
-Contabilidade única para à vista e margem: saldo = saldo inicial + resultados realizados; patrimônio = saldo +
-resultado aberto. Em cripto à vista o tamanho é em moeda de cotação; em forex, em unidades (lotes × tamanho do lote).
-"""
 from __future__ import annotations
 
-import math
-from collections import defaultdict
-from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+import asyncio
+import uuid
+from collections import OrderedDict
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
+from typing import Any
 
-from app.services.brokers.base import Candle
-from app.strategies.base import Strategy, StrategyParams, Target
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
-MAX_EQUITY_POINTS = 400
+from app.api.deps import DB, ActivePlan, CurrentUser
+from app.core.ratelimit import hit
+from app.engine.backtest import BacktestConfig, run_backtest
+from app.models import Bot, ExchangeCredential, Market
+from app.services.brokers.base import BrokerError, Candle
+from app.services.brokers.binance import BinanceClient
+from app.services.brokers.factory import ctrader_broker
+from app.strategies.library import get_strategy
+
+router = APIRouter(prefix="/backtest", tags=["backtest"])
+
+INTERVAL_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+MAX_CANDLES = 30_000
+MAX_CHART_CANDLES = 15_000
+BINANCE_FIRST_DAY = date(2017, 8, 17)
 
 
-@dataclass
-class BacktestConfig:
-    initial_balance: float = 1000.0
-    order_size_quote: float = 100.0  # cripto: valor por ordem
-    order_units: float | None = None  # forex: unidades por ordem (substitui order_size_quote)
+class BacktestIn(BaseModel):
+    strategy: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    market: Market = Market.crypto
+    credential_id: uuid.UUID | None = None  # forex: conta cTrader do cliente (fonte do histórico)
+    order_lots: float | None = Field(None, gt=0, le=100)
     allow_short: bool = False
-    stop_loss_pct: float | None = None
-    take_profit_pct: float | None = None
-    max_daily_loss_quote: float | None = None
-    max_trades_per_day: int = 50
-    fee_rate: float = 0.001  # por lado, sobre o valor negociado (0,1% = taxa spot padrão da Binance)
-    slippage_bps: float = 5  # contra você em cada execução
+    symbol: str = Field(pattern=r"^[A-Z0-9]{5,20}$")
+    start: date
+    end: date
+    initial_balance: float = Field(1000, gt=0, le=10_000_000)
+    order_size_quote: float = Field(100, gt=0, le=10_000_000)
+    stop_loss_pct: float | None = Field(None, gt=0, le=50)
+    take_profit_pct: float | None = Field(None, gt=0, le=500)
+    max_daily_loss_quote: float | None = Field(None, gt=0)
+    max_trades_per_day: int = Field(50, ge=1, le=500)
+    fee_rate: float = Field(0.001, ge=0, le=0.01)
+    slippage_bps: float = Field(5, ge=0, le=200)
+
+    @model_validator(mode="after")
+    def check_dates(self) -> BacktestIn:
+        today = datetime.now(UTC).date()
+        if self.end <= self.start:
+            raise ValueError("A data final precisa ser depois da inicial")
+        if self.start < BINANCE_FIRST_DAY:
+            raise ValueError("A Binance tem histórico a partir de 17/08/2017")
+        if self.end > today:
+            self.end = today
+        if self.market == Market.forex and not (self.credential_id and self.order_lots):
+            raise ValueError("Para forex informe a conta cTrader e o tamanho em lotes")
+        if self.market == Market.crypto and self.allow_short:
+            raise ValueError("Cripto à vista não opera vendido")
+        return self
 
 
-@dataclass
-class Trade:
-    side: str  # long | short
-    entry_time: int
-    exit_time: int
-    entry_price: float
-    exit_price: float
-    qty: float
-    pnl: float  # já com taxas
-    return_pct: float  # sobre o valor da posição na entrada
-    fees: float
-    exit_reason: str
+class BotBacktestIn(BaseModel):
+    start: date
+    end: date
+    initial_balance: float = Field(1000, gt=0, le=10_000_000)
 
 
-@dataclass
-class Metrics:
-    trades: int
-    wins: int
-    losses: int
-    win_rate_pct: float
-    avg_win: float
-    avg_loss: float
-    payoff: float | None  # ganho médio / perda média
-    expectancy: float  # resultado médio por operação
-    expectancy_pct: float  # resultado médio por operação (% do valor da posição)
-    profit_factor: float | None  # soma dos ganhos / soma das perdas
-    net_pnl: float
-    return_pct: float
-    buy_hold_pct: float
-    max_drawdown_pct: float
-    fees_total: float
-    exposure_pct: float  # % do tempo posicionado
-    avg_hold_minutes: float
-    best_trade: float
-    worst_trade: float
-    max_consecutive_losses: int
-    final_balance: float
-    long_trades: int = 0
-    short_trades: int = 0
+# Cache em memória dos últimos históricos baixados (evita rebaixar ao ajustar parâmetros).
+_CACHE: OrderedDict[tuple, list[Candle]] = OrderedDict()
+_CACHE_SIZE = 8
 
 
-@dataclass
-class BacktestResult:
-    metrics: Metrics
-    trades: list[Trade]
-    equity: list[tuple[int, float, float]]  # (tempo, patrimônio do robô, comprar e segurar)
-    monthly: list[dict]
-    warnings: list[str]
-    candles: int
-    start: int
-    end: int
-    open_position_closed_at_end: bool = False
-    params: dict = field(default_factory=dict)
-    ohlc: list[tuple[int, float, float, float, float]] = field(default_factory=list)  # candles do período testado
-
-    def to_dict(self) -> dict:
-        d = asdict(self)
-        d["metrics"] = {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in d["metrics"].items()}
-        return d
-
-
-@dataclass
-class _Position:
-    side: str
-    qty: float
-    entry_price: float
-    entry_time: int
-    entry_fee: float
-
-    @property
-    def sign(self) -> int:
-        return 1 if self.side == "long" else -1
-
-    def unrealized(self, price: float) -> float:
-        return self.sign * (price - self.entry_price) * self.qty
+async def load_candles(symbol: str, interval: str, start_ms: int, end_ms: int, source: Any = None) -> list[Candle]:
+    """Histórico da Binance (cripto) ou da conta cTrader do cliente (forex, via `source`)."""
+    key = (id(source) if source else "binance", symbol, interval, start_ms, end_ms)
+    if key in _CACHE:
+        _CACHE.move_to_end(key)
+        return _CACHE[key]
+    client = source or BinanceClient("live")
+    try:
+        candles = await client.get_klines_range(symbol, interval, start_ms, end_ms, MAX_CANDLES)
+    finally:
+        await client.close()
+    if source is not None:
+        return candles  # não guarda no cache: depende da conta
+    _CACHE[key] = candles
+    if len(_CACHE) > _CACHE_SIZE:
+        _CACHE.popitem(last=False)
+    return candles
 
 
-def _day(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m-%d")
+async def execute(body: BacktestIn, db=None, user=None) -> dict:
+    try:
+        strategy = get_strategy(body.strategy)
+        params = strategy.parse_params(body.params)
+    except ValidationError as exc:
+        msgs = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Parâmetros inválidos — {msgs}") from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-
-def _month(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m")
-
-
-def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candle], cfg: BacktestConfig) -> BacktestResult:
-    warmup = strategy.required_candles(params)
-    if len(candles) <= warmup + 2:
-        raise ValueError(
-            f"São necessários mais de {warmup + 2} candles para esta estratégia; o período tem {len(candles)}. "
-            "Aumente o período ou use um tempo gráfico menor."
+    step = INTERVAL_MS[params.timeframe]
+    warmup = strategy.required_candles(params) + 2
+    start_ms = int(datetime.combine(body.start, time.min, UTC).timestamp() * 1000)
+    end_ms = int(datetime.combine(body.end + timedelta(days=1), time.min, UTC).timestamp() * 1000) - 1
+    estimated = (end_ms - start_ms) // step + warmup
+    if estimated > MAX_CANDLES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Período longo demais para o tempo gráfico {params.timeframe} (~{estimated:,} candles; limite {MAX_CANDLES:,}). "
+            "Encurte o período ou use um tempo gráfico maior.".replace(",", "."),
         )
 
-    fee = cfg.fee_rate
-    slip = cfg.slippage_bps / 10_000
-    max_hold = strategy.max_hold_minutes(params)
-    max_hold_ms = max_hold * 60_000 if max_hold else None
-    spot = cfg.order_units is None  # à vista: não pode gastar mais do que tem
+    source, units = None, None
+    if body.market == Market.forex:
+        cred = await db.get(ExchangeCredential, body.credential_id) if db else None
+        if not cred or cred.user_id != user.id or cred.exchange != "ctrader":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Conta cTrader não encontrada")
+        try:
+            source = await ctrader_broker(db, cred)
+            units = float(Decimal(str(body.order_lots)) * (await source.get_rules(body.symbol)).lot_size)
+        except BrokerError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"cTrader: {exc}") from exc
+    try:
+        # Busca candles extras antes do início para "aquecer" os indicadores.
+        candles = await load_candles(body.symbol, params.timeframe, start_ms - warmup * step, end_ms, source)
+    except BrokerError as exc:
+        origin = "do cTrader" if source else "da Binance"
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Não foi possível baixar o histórico {origin}: {exc}") from exc
 
-    balance = cfg.initial_balance
-    pos: _Position | None = None
-    pending: Target | None = None
-    trades: list[Trade] = []
-    equity: list[tuple[int, float, float]] = []
-    peak = cfg.initial_balance
-    max_dd = 0.0
-    bars_in_position = 0
-    day_trades: dict[str, int] = defaultdict(int)
-    day_pnl: dict[str, float] = defaultdict(float)
-    bh_start = candles[warmup].open
-    # Referência justa: comprar e segurar O MESMO TAMANHO de posição do robô.
-    bh_units = cfg.order_units if cfg.order_units is not None else min(cfg.order_size_quote, cfg.initial_balance) / bh_start
-
-    def buy_hold_value(close: float) -> float:
-        return cfg.initial_balance + bh_units * (close - bh_start)
-
-    def open_position(side: str, raw_price: float, when: int) -> None:
-        nonlocal pos, balance
-        price = raw_price * (1 + slip) if side == "long" else raw_price * (1 - slip)
-        if cfg.order_units is not None:
-            qty = cfg.order_units
-        else:
-            spend = min(cfg.order_size_quote, balance)
-            if spend <= 0:
-                return
-            qty = spend / price
-        entry_fee = qty * price * fee
-        balance -= entry_fee
-        pos = _Position(side=side, qty=qty, entry_price=price, entry_time=when, entry_fee=entry_fee)
-        day_trades[_day(when)] += 1
-
-    def close_position(raw_price: float, when: int, reason: str) -> None:
-        nonlocal pos, balance
-        assert pos is not None
-        price = raw_price * (1 - slip) if pos.side == "long" else raw_price * (1 + slip)
-        exit_fee = pos.qty * price * fee
-        gross = pos.unrealized(price)
-        pnl = gross - pos.entry_fee - exit_fee
-        balance += gross - exit_fee
-        trades.append(
-            Trade(
-                side=pos.side,
-                entry_time=pos.entry_time,
-                exit_time=when,
-                entry_price=pos.entry_price,
-                exit_price=price,
-                qty=pos.qty,
-                pnl=pnl,
-                return_pct=pnl / (pos.qty * pos.entry_price) * 100,
-                fees=pos.entry_fee + exit_fee,
-                exit_reason=reason,
-            )
-        )
-        day_trades[_day(when)] += 1
-        day_pnl[_day(when)] += pnl
-        pos = None
-
-    for i in range(warmup, len(candles)):
-        bar = candles[i]
-        today = _day(bar.open_time)
-
-        # 1) O que foi decidido no fechamento anterior executa na abertura deste candle.
-        if pending is not None:
-            if pos is not None and pos.side != pending:
-                close_position(bar.open, bar.open_time, "Sinal de saída da estratégia")
-            if pos is None and pending in ("long", "short"):
-                open_position(pending, bar.open, bar.open_time)
-            pending = None
-
-        # 2) Saídas de risco dentro do candle (stop primeiro quando os dois são tocados).
-        if pos is not None:
-            e = pos.entry_price
-            if pos.side == "long":
-                sl = e * (1 - cfg.stop_loss_pct / 100) if cfg.stop_loss_pct else None
-                tp = e * (1 + cfg.take_profit_pct / 100) if cfg.take_profit_pct else None
-                if sl is not None and bar.low <= sl:
-                    close_position(min(sl, bar.open), bar.open_time, "Stop loss")
-                elif tp is not None and bar.high >= tp:
-                    close_position(max(tp, bar.open), bar.open_time, "Alvo de lucro")
-            else:
-                sl = e * (1 + cfg.stop_loss_pct / 100) if cfg.stop_loss_pct else None
-                tp = e * (1 - cfg.take_profit_pct / 100) if cfg.take_profit_pct else None
-                if sl is not None and bar.high >= sl:
-                    close_position(max(sl, bar.open), bar.open_time, "Stop loss")
-                elif tp is not None and bar.low <= tp:
-                    close_position(min(tp, bar.open), bar.open_time, "Alvo de lucro")
-            if pos is not None and max_hold_ms and bar.close_time - pos.entry_time >= max_hold_ms:
-                close_position(bar.close, bar.close_time, f"Tempo máximo de {max_hold} min")
-
-        if pos is not None:
-            bars_in_position += 1
-
-        # 3) Decisão da estratégia no fechamento, só com o passado.
-        window = candles[max(0, i + 1 - warmup - 2) : i + 1]
-        current: Target = pos.side if pos else "flat"  # type: ignore[assignment]
-        decision = strategy.decide(window, current, params, cfg.allow_short)
-        target = decision.target
-        if target == "short" and not cfg.allow_short:
-            target = "flat"
-        if target is not None and target != current and i + 1 < len(candles):
-            if target in ("long", "short"):
-                blocked = day_trades[today] >= cfg.max_trades_per_day or (
-                    cfg.max_daily_loss_quote is not None and day_pnl[today] <= -cfg.max_daily_loss_quote
-                ) or (spot and balance <= 0)
-                if blocked:
-                    target = "flat" if pos is not None else None  # sem nova entrada; ainda pode sair
-            pending = target
-
-        # 4) Patrimônio marcado no fechamento.
-        value = balance + (pos.unrealized(bar.close) if pos else 0.0)
-        peak = max(peak, value)
-        max_dd = max(max_dd, (peak - value) / peak * 100 if peak > 0 else 0.0)
-        equity.append((bar.close_time, value, buy_hold_value(bar.close)))
-
-    closed_at_end = False
-    if pos is not None:
-        last = candles[-1]
-        close_position(last.close, last.close_time, "Fim do período")
-        closed_at_end = True
-        equity[-1] = (last.close_time, balance, equity[-1][2])
-
-    total_bars = len(candles) - warmup
-    bh_final = buy_hold_value(candles[-1].close)
-    metrics = _metrics(trades, cfg, balance, equity, max_dd, bars_in_position / total_bars * 100, bh_final / cfg.initial_balance)
-    return BacktestResult(
-        metrics=metrics,
-        trades=trades,
-        equity=_downsample(equity),
-        monthly=_monthly(trades),
-        warnings=_warnings(metrics, strategy, candles, warmup),
-        candles=len(candles),
-        start=candles[warmup].open_time,
-        end=candles[-1].close_time,
-        open_position_closed_at_end=closed_at_end,
-        params=params.model_dump(exclude_none=True),
-        ohlc=[(c.open_time, c.open, c.high, c.low, c.close) for c in candles[warmup:]],
+    cfg = BacktestConfig(
+        initial_balance=body.initial_balance,
+        order_size_quote=body.order_size_quote,
+        order_units=units,
+        allow_short=body.allow_short,
+        stop_loss_pct=body.stop_loss_pct,
+        take_profit_pct=body.take_profit_pct,
+        max_daily_loss_quote=body.max_daily_loss_quote,
+        max_trades_per_day=body.max_trades_per_day,
+        fee_rate=body.fee_rate,
+        slippage_bps=body.slippage_bps,
     )
+    try:
+        # CPU: roda fora do loop de eventos para não travar a API.
+        result = await asyncio.to_thread(run_backtest, strategy, params, candles, cfg)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-
-def _metrics(trades: list[Trade], cfg: BacktestConfig, final: float, equity, max_dd: float, exposure: float, bh_ratio: float) -> Metrics:
-    pnls = [t.pnl for t in trades]
-    wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p <= 0]
-    gross_win, gross_loss = sum(wins), -sum(losses)
-    streak = worst_streak = 0
-    for p in pnls:
-        streak = streak + 1 if p <= 0 else 0
-        worst_streak = max(worst_streak, streak)
-    n = len(trades)
-    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
-    avg_win = (sum(wins) / len(wins)) if wins else 0.0
-    return Metrics(
-        trades=n,
-        wins=len(wins),
-        losses=len(losses),
-        win_rate_pct=len(wins) / n * 100 if n else 0.0,
-        avg_win=avg_win,
-        avg_loss=avg_loss,
-        payoff=(avg_win / -avg_loss) if wins and avg_loss < 0 else None,
-        expectancy=sum(pnls) / n if n else 0.0,
-        expectancy_pct=sum(t.return_pct for t in trades) / n if n else 0.0,
-        profit_factor=(gross_win / gross_loss) if gross_loss > 0 else None,
-        net_pnl=final - cfg.initial_balance,
-        return_pct=(final - cfg.initial_balance) / cfg.initial_balance * 100,
-        buy_hold_pct=(bh_ratio - 1) * 100,
-        max_drawdown_pct=max_dd,
-        fees_total=sum(t.fees for t in trades),
-        exposure_pct=exposure,
-        avg_hold_minutes=sum((t.exit_time - t.entry_time) / 60_000 for t in trades) / n if n else 0.0,
-        best_trade=max(pnls) if pnls else 0.0,
-        worst_trade=min(pnls) if pnls else 0.0,
-        max_consecutive_losses=worst_streak,
-        final_balance=final,
-        long_trades=sum(1 for t in trades if t.side == "long"),
-        short_trades=sum(1 for t in trades if t.side == "short"),
-    )
-
-
-def _downsample(points: list[tuple[int, float, float]]) -> list[tuple[int, float, float]]:
-    if len(points) <= MAX_EQUITY_POINTS:
-        return points
-    step = len(points) / MAX_EQUITY_POINTS
-    out = [points[int(i * step)] for i in range(MAX_EQUITY_POINTS - 1)]
-    out.append(points[-1])
+    out = result.to_dict()
+    out["trades"] = out["trades"][-500:]  # as mais recentes; as métricas usam todas
+    # Candles para o gráfico (TradingView Lightweight Charts). Limite para manter a resposta leve.
+    out["ohlc"] = [[t, *(float(f"{v:.8g}") for v in ohlc)] for t, *ohlc in out["ohlc"][-MAX_CHART_CANDLES:]]
+    out["symbol"] = body.symbol
+    out["strategy"] = strategy.code
+    out["market"] = body.market.value
+    out["timeframe"] = params.timeframe
+    out["config"] = {k: v for k, v in body.model_dump(mode="json").items() if k not in ("params",)}
     return out
 
 
-def _monthly(trades: list[Trade]) -> list[dict]:
-    months: dict[str, dict] = {}
-    for t in trades:
-        m = months.setdefault(_month(t.exit_time), {"month": _month(t.exit_time), "trades": 0, "wins": 0, "pnl": 0.0})
-        m["trades"] += 1
-        m["wins"] += t.pnl > 0
-        m["pnl"] += t.pnl
-    return [months[k] for k in sorted(months)]
+@router.post("")
+async def backtest(body: BacktestIn, user: CurrentUser, _: ActivePlan, db: DB) -> dict:
+    await hit(f"backtest:{user.id}", limit=40, window_seconds=3600)
+    return await execute(body, db, user)
 
 
-def _warnings(m: Metrics, strategy: Strategy, candles: list[Candle], warmup: int) -> list[str]:
-    w: list[str] = []
-    if m.trades == 0:
-        w.append("Nenhuma operação no período. Experimente um período maior ou outros parâmetros.")
-    elif m.trades < 30:
-        w.append(f"Só {m.trades} operações: amostra pequena, o resultado pode ser obra do acaso. O ideal é passar de 100.")
-    if m.trades and m.return_pct < m.buy_hold_pct:
-        w.append("O robô rendeu menos do que comprar o mesmo tamanho de posição no início e segurar até o fim do período.")
-    if m.profit_factor is not None and m.profit_factor < 1:
-        w.append("Fator de lucro abaixo de 1: as perdas somaram mais que os ganhos.")
-    days = (candles[-1].close_time - candles[warmup].open_time) / 86_400_000
-    if strategy.style == "swing" and days < 180:
-        w.append("Para swing trade, teste pelo menos 6 meses, passando por alta, queda e lateralização.")
-    if strategy.style == "day" and days < 30:
-        w.append("Para day trade, teste pelo menos 1 mês de dados.")
-    w.append(
-        "Resultado passado não garante resultado futuro. A simulação não reproduz falhas de conexão, "
-        "livro de ofertas raso nem mudanças de taxa. Ajustar parâmetros até o histórico ficar bonito "
-        "costuma piorar o resultado real (sobreajuste)."
+@router.post("/bot/{bot_id}")
+async def backtest_bot(bot_id: uuid.UUID, body: BotBacktestIn, user: CurrentUser, _: ActivePlan, db: DB) -> dict:
+    """Testa no histórico exatamente a configuração de um robô existente."""
+    bot = await db.get(Bot, bot_id)
+    if not bot or bot.user_id != user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Robô não encontrado")
+    await hit(f"backtest:{user.id}", limit=40, window_seconds=3600)
+
+    def f(v: Decimal | None) -> float | None:
+        return float(v) if v is not None else None
+
+    return await execute(
+        BacktestIn(
+            strategy=bot.strategy,
+            params=bot.params,
+            market=bot.market,
+            credential_id=bot.credential_id,
+            order_lots=f(bot.order_lots),
+            allow_short=bot.allow_short,
+            symbol=bot.symbol,
+            start=body.start,
+            end=body.end,
+            initial_balance=body.initial_balance,
+            order_size_quote=float(bot.order_size_quote or 100),
+            stop_loss_pct=f(bot.stop_loss_pct),
+            take_profit_pct=f(bot.take_profit_pct),
+            max_daily_loss_quote=f(bot.max_daily_loss_quote),
+            max_trades_per_day=bot.max_trades_per_day,
+        ),
+        db,
+        user,
     )
-    return w
