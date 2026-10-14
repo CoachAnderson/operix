@@ -1,0 +1,21 @@
+OráculoInvest — kit do logo (direção Vela)
+
+Arquivos
+- oraculoinvest-logo.svg / .png ............ logo completo para fundo claro (nome em curvas, não depende da fonte)
+- oraculoinvest-logo-branco.svg / .png ..... logo completo para fundo escuro
+- oraculoinvest-simbolo(-branco).svg / .png  só o símbolo (perfil de redes sociais, marca d'água)
+- oraculoinvest-icone-app.svg, icone-app-1024/512/192.png, apple-touch-icon.png ... ícone de app
+- favicon.svg, favicon.ico, favicon-16/32/48.png ... ícone do navegador
+
+Cores
+- Noite  #17133D  (símbolo e nome)
+- Âmbar  #E9A03B  (candle)
+- Névoa  #F4F3F9  (fundo claro e versão branca)
+
+Fonte do nome: Bricolage Grotesque (Oráculo em 800, Invest em 400). Gratuita no Google Fonts.
+
+Uso
+- Tamanho mínimo do logo completo: 120 px de largura. Abaixo disso, use só o símbolo.
+- Abaixo de 32 px, use o favicon (sem o pavio, traço mais grosso).
+- Deixe em volta do logo um espaço livre de pelo menos metade da altura do símbolo.
+- Não mude as cores, não aplique sombra nem contorno e não estique o logo.
