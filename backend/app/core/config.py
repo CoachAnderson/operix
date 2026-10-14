@@ -10,7 +10,7 @@ DEV_JWT_SECRET = "dev-only-secret-troque-em-producao-0000000000"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_name: str = "Operix"
+    app_name: str = "OráculoInvest"
     environment: Literal["development", "production", "test"] = "development"
     public_url: str = "http://localhost:3000"  # URL do painel (Next.js)
     api_public_url: str = "http://localhost:8000"  # URL pública da API (webhooks)
