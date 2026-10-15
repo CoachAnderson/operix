@@ -1,0 +1,46 @@
+CONECTOR ORÁCULOINVEST PARA METATRADER 5 (futuros da B3: mini-índice WIN e mini-dólar WDO)
+==========================================================================================
+
+O que ele faz
+  Liga os seus robôs do OráculoInvest ao MetaTrader 5 da SUA corretora. Ele roda no seu computador
+  (ou numa VPS Windows) e recebe as ordens dos robôs pela internet. Seu login e sua senha da corretora
+  ficam só aqui: a plataforma nunca os vê.
+
+Antes de começar
+  1. Instale o MetaTrader 5 da sua corretora (XP, Clear, Rico, Genial, etc.) e entre na conta.
+     Comece pela CONTA DEMO.
+  2. No MetaTrader 5, clique no botão "Algo Trading" (negociação automática) para deixá-lo ligado.
+  3. No painel do OráculoInvest: Corretora → MetaTrader 5 → Criar conexão. Copie o token.
+
+Instalação (uma vez)
+  1. Instale o Python 3.13 64 bits: https://www.python.org/downloads/windows/
+     Marque "Add python.exe to PATH".
+  2. Dê dois cliques em iniciar.bat. Na primeira vez ele abre o conector.ini: cole o token,
+     salve e rode o iniciar.bat de novo.
+  (Se você recebeu o OraculoConector.exe, não precisa de Python: coloque o conector.ini na mesma
+   pasta do .exe e abra o .exe.)
+
+Pronto quando aparecer
+  "Conectado ao OráculoInvest. Conta 123456 (conta demo). Negociação automática: LIGADA"
+  No painel, a conexão fica verde (online).
+
+Deixe aberto
+  O MetaTrader 5 e a janela do conector precisam ficar abertos enquanto os robôs operam.
+  Para operar o dia todo sem depender do seu computador, use uma VPS Windows.
+
+Travas de segurança (conector.ini → [limites])
+  ativos        Só estes ativos podem ser operados (padrão WIN,WDO).
+  max_contratos Nenhuma ordem passa desse número de contratos (padrão 5).
+  Além disso, o conector: não soma posição em cima de outra que já exista no mesmo contrato;
+  só fecha posições abertas por ele; e o servidor recusa trabalhar se a conta do MetaTrader 5
+  for real e a conexão do painel for de conta demo (ou o contrário).
+
+Problemas comuns
+  "Token do conector inválido"      Gere um novo token no painel e cole no conector.ini.
+  "Negociação automática: DESLIGADA" Ligue o botão "Algo Trading" no MetaTrader 5.
+  "Nenhum contrato de WIN disponível" A conta não tem acesso à B3 ou o ativo está oculto:
+                                      no MT5, abra Observação do Mercado e mostre os símbolos WIN.
+  Horários estranhos nos gráficos    Ajuste fuso_servidor no conector.ini (B3 normalmente -3).
+
+Registro
+  Tudo o que o conector faz fica em conector.log, na mesma pasta.
