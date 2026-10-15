@@ -55,10 +55,13 @@ export const VENUE_LABEL: Record<Venue, string> = {
 
 /** No forex o ambiente de teste é a conta demo da corretora. */
 export function venueLabel(venue: Venue, market: Market = "crypto"): string {
-  return market === "forex" && venue === "testnet" ? "Conta demo" : VENUE_LABEL[venue];
+  return market !== "crypto" && venue === "testnet" ? "Conta demo" : VENUE_LABEL[venue];
 }
 
-export const MARKET_LABEL: Record<Market, string> = { crypto: "Cripto (Binance)", forex: "Forex (cTrader)" };
+export const MARKET_LABEL: Record<Market, string> = { crypto: "Cripto (Binance)", forex: "Forex (cTrader)", b3: "Futuros B3 (MetaTrader 5)" };
+
+/** Reais por ponto por contrato (o motor guarda a posição em "pontos × valor do ponto"). */
+export const B3_POINT_VALUE: Record<string, number> = { WIN: 0.2, WDO: 10 };
 
 export const VENUE_HINT: Record<Venue, string> = {
   paper: "Preços reais, saldo fictício. Nada sai da sua conta.",

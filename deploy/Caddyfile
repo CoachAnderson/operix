@@ -1,7 +1,20 @@
-# HTTPS automático (Let's Encrypt). DOMAIN vem do .env, ex.: app.operix.com.br
+# HTTPS automático (Let's Encrypt). DOMAIN vem do .env, ex.: app.oraculoinvest.com.br
 {$DOMAIN} {
 	encode zstd gzip
-	reverse_proxy web:3000
+
+	# Conector do MetaTrader 5: espera comandos por até 25 s ("long polling").
+	# Vai direto para a API, sem passar pelo proxy do Next (que corta em 30 s).
+	handle /api/v1/mt5/agent/* {
+		reverse_proxy api:8000 {
+			transport http {
+				read_timeout 60s
+			}
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
 }
 
 # Redireciona www para o domínio principal (opcional)

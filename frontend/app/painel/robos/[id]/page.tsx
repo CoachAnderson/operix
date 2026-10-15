@@ -7,7 +7,7 @@ import { OrdersTable } from "@/components/OrdersTable";
 import { TradingViewWidget } from "@/components/TradingViewWidget";
 import { ErrorText, Loading, StatusTag, Stripe, VenueTag, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
-import { MODE_LABEL, dateTime, money, pnlClass, price, qty, signed, venueLabel } from "@/lib/format";
+import { B3_POINT_VALUE, MODE_LABEL, dateTime, money, pnlClass, price, qty, signed, venueLabel } from "@/lib/format";
 import type { BotSummary, Credential, Order, Venue } from "@/lib/types";
 
 export default function BotDetailPage() {
@@ -63,12 +63,12 @@ export default function BotDetailPage() {
   async function saveEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!edit) return;
-    if (edit.venue === "live" && b.venue !== "live" && !window.confirm("Passar este robô para a CONTA REAL? As próximas ordens usarão seu saldo na Binance.")) return;
+    if (edit.venue === "live" && b.venue !== "live" && !window.confirm("Passar este robô para a CONTA REAL? As próximas ordens usarão o dinheiro da sua conta na corretora.")) return;
     const body = {
       exec_mode: edit.exec_mode,
       venue: edit.venue,
-      credential_id: edit.venue === "paper" && !forex ? null : edit.credential_id || null,
-      ...(forex ? { order_lots: edit.order_lots, allow_short: edit.allow_short === "true" } : { order_size_quote: edit.order_size_quote }),
+      credential_id: edit.venue === "paper" && !margin ? null : edit.credential_id || null,
+      ...(margin ? { order_lots: edit.order_lots, allow_short: edit.allow_short === "true" } : { order_size_quote: edit.order_size_quote }),
       stop_loss_pct: edit.stop_loss_pct || null,
       take_profit_pct: edit.take_profit_pct || null,
       max_daily_loss_quote: edit.max_daily_loss_quote || null,
@@ -83,6 +83,10 @@ export default function BotDetailPage() {
 
   const running = b.status === "running";
   const forex = b.market === "forex";
+  const isB3 = b.market === "b3";
+  const margin = b.market !== "crypto"; // forex e B3: lotes/contratos, comprado e vendido
+  const exchange = { crypto: "binance", forex: "ctrader", b3: "mt5" }[b.market];
+  const lotsLabel = isB3 ? "Contratos por ordem" : "Lotes por ordem";
   const sign = s.position?.side === "short" ? -1 : 1;
 
   return (
@@ -158,10 +162,13 @@ export default function BotDetailPage() {
         <h2>Posição</h2>
         {s.position ? (
           <p>
-            {s.position.side === "short" ? "Vendido" : "Comprado"} em {qty(s.position.qty)} {forex ? "unidades" : ""} a {price(s.position.avg_price)}, desde {dateTime(s.position.opened_at)}.
+            {s.position.side === "short" ? "Vendido" : "Comprado"} em{" "}
+            {isB3 ? `${qty(Number(s.position.qty) / (B3_POINT_VALUE[b.symbol] ?? 1))} contrato(s) de ${b.symbol}` : `${qty(s.position.qty)}${forex ? " unidades" : ""}`} a {price(s.position.avg_price)}, desde{" "}
+            {dateTime(s.position.opened_at)}.
             {b.stop_loss_pct && ` Stop em ${price(Number(s.position.avg_price) * (1 - (sign * Number(b.stop_loss_pct)) / 100))}.`}
             {b.take_profit_pct && ` Alvo em ${price(Number(s.position.avg_price) * (1 + (sign * Number(b.take_profit_pct)) / 100))}.`}
-            {forex && " Stop e alvo também ficam registrados na corretora."}
+            {margin && " Stop e alvo também ficam registrados na corretora."}
+            {isB3 && b.strategy === "ema_cross_day" && " Day trade: zera 10 minutos antes do fim do pregão."}
           </p>
         ) : (
           <p className="muted">Sem posição aberta. Última verificação: {dateTime(b.last_tick_at)}.</p>
@@ -176,8 +183,10 @@ export default function BotDetailPage() {
         {!edit ? (
           <dl className="figures">
             <div>
-              <dt>{forex ? "Lotes por ordem" : "Valor por ordem"}</dt>
-              <dd style={{ fontSize: "1.1rem" }}>{forex ? `${money(b.order_lots)}${b.allow_short ? ", compra e venda" : ", só compra"}` : money(b.order_size_quote)}</dd>
+              <dt>{margin ? lotsLabel : "Valor por ordem"}</dt>
+              <dd style={{ fontSize: "1.1rem" }}>
+                {margin ? `${isB3 ? qty(b.order_lots) : money(b.order_lots)}${b.allow_short ? ", compra e venda" : ", só compra"}` : money(b.order_size_quote)}
+              </dd>
             </div>
             <div><dt>Stop loss</dt><dd style={{ fontSize: "1.1rem" }}>{b.stop_loss_pct ? `${money(b.stop_loss_pct)}%` : "Desligado"}</dd></div>
             <div><dt>Alvo de lucro</dt><dd style={{ fontSize: "1.1rem" }}>{b.take_profit_pct ? `${money(b.take_profit_pct)}%` : "Desligado"}</dd></div>
@@ -202,22 +211,22 @@ export default function BotDetailPage() {
                   ))}
                 </select>
               </label>
-              {(edit.venue !== "paper" || forex) && (
+              {(edit.venue !== "paper" || margin) && (
                 <label>
-                  {forex ? "Conta cTrader" : "Credencial"}
+                  {isB3 ? "Conexão do MetaTrader 5" : forex ? "Conta cTrader" : "Credencial"}
                   <select required value={edit.credential_id} onChange={(e) => setEdit({ ...edit, credential_id: e.target.value })}>
                     <option value="">Escolha…</option>
-                    {creds?.filter((c) => c.exchange === (forex ? "ctrader" : "binance") && (c.venue === edit.venue || (forex && edit.venue === "paper"))).map((c) => (
+                    {creds?.filter((c) => c.exchange === exchange && (c.venue === edit.venue || (margin && edit.venue === "paper"))).map((c) => (
                       <option key={c.id} value={c.id}>{c.label} (final {c.key_last4})</option>
                     ))}
                   </select>
                 </label>
               )}
-              {forex ? (
+              {margin ? (
                 <>
                   <label>
-                    Lotes por ordem
-                    <input type="number" min="0.01" step="0.01" required value={edit.order_lots} onChange={(e) => setEdit({ ...edit, order_lots: e.target.value })} />
+                    {lotsLabel}
+                    <input type="number" min={isB3 ? "1" : "0.01"} step={isB3 ? "1" : "0.01"} required value={edit.order_lots} onChange={(e) => setEdit({ ...edit, order_lots: e.target.value })} />
                   </label>
                   <label>
                     Direção

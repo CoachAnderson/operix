@@ -11,7 +11,53 @@ import type { Bot, Credential, ExecMode, Market, StrategyInfo, Subscription, Ven
 import { BinanceSignup } from "@/components/BinanceSignup";
 import { STRATEGY_LESSON } from "@/lib/learn/lessons";
 
-const DEFAULT_SYMBOL: Record<Market, string> = { crypto: "BTCUSDT", forex: "EURUSD" };
+/** O que muda na tela conforme o mercado. */
+const MARKETS: Record<
+  Market,
+  { label: string; hint: string; exchange: string; symbol: string; lots: string; sl: string; tp: string; paper: string; credLabel: string; credMissing: string }
+> = {
+  crypto: {
+    label: "Cripto",
+    hint: "Binance à vista. Compra e vende o que tem.",
+    exchange: "binance",
+    symbol: "BTCUSDT",
+    lots: "0.01",
+    sl: "2",
+    tp: "4",
+    paper: "1000",
+    credLabel: "Credencial da Binance",
+    credMissing: "chave da Binance",
+  },
+  forex: {
+    label: "Forex",
+    hint: "Corretoras com cTrader. Opera comprado e vendido, em lotes.",
+    exchange: "ctrader",
+    symbol: "EURUSD",
+    lots: "0.01",
+    sl: "0.5",
+    tp: "1",
+    paper: "10000",
+    credLabel: "Conta cTrader",
+    credMissing: "conta cTrader",
+  },
+  b3: {
+    label: "Futuros B3",
+    hint: "Mini-índice (WIN) e mini-dólar (WDO) pelo MetaTrader 5 da sua corretora. Comprado e vendido, em contratos.",
+    exchange: "mt5",
+    symbol: "WIN",
+    lots: "1",
+    sl: "0.5",
+    tp: "1",
+    paper: "10000",
+    credLabel: "Conexão do MetaTrader 5",
+    credMissing: "conexão do MetaTrader 5",
+  },
+};
+
+const B3_SYMBOLS = [
+  { id: "WIN", label: "WIN · Mini Ibovespa", hint: "Cada ponto vale R$ 0,20 por contrato." },
+  { id: "WDO", label: "WDO · Mini dólar", hint: "Cada ponto vale R$ 10 por contrato." },
+];
 
 export default function NewBotPage() {
   const router = useRouter();
@@ -39,16 +85,18 @@ export default function NewBotPage() {
     paper_quote_balance: "1000",
   });
 
+  const m = MARKETS[form.market];
   const forex = form.market === "forex";
+  const b3 = form.market === "b3";
+  const margin = form.market !== "crypto"; // forex e B3: lotes/contratos, comprado e vendido
   const selected = strategies?.find((s) => s.code === strategy);
   const plan = sub?.status === "active" ? sub.plan : null;
-  const exchange = forex ? "ctrader" : "binance";
-  // Forex na simulação usa qualquer conta cTrader do cliente (para cotações); nos demais, a do ambiente.
+  // Forex e B3 na simulação usam qualquer conexão do cliente (para cotações); nos demais, a do ambiente.
   const venueCreds = useMemo(
-    () => creds?.filter((c) => c.exchange === exchange && (forex && form.venue === "paper" ? true : c.venue === form.venue)) ?? [],
-    [creds, exchange, forex, form.venue],
+    () => creds?.filter((c) => c.exchange === m.exchange && (margin && form.venue === "paper" ? true : c.venue === form.venue)) ?? [],
+    [creds, m.exchange, margin, form.venue],
   );
-  const needsCred = forex || form.venue !== "paper";
+  const needsCred = margin || form.venue !== "paper";
 
   function chooseStrategy(s: StrategyInfo) {
     setStrategy(s.code);
@@ -56,16 +104,18 @@ export default function NewBotPage() {
     if (!form.name) setForm((f) => ({ ...f, name: s.name }));
   }
 
-  function chooseMarket(m: Market) {
+  function chooseMarket(market: Market) {
+    const cfg = MARKETS[market];
     setForm((f) => ({
       ...f,
-      market: m,
-      symbol: DEFAULT_SYMBOL[m],
-      allow_short: m === "forex",
+      market,
+      symbol: cfg.symbol,
+      allow_short: market !== "crypto",
       credential_id: "",
-      stop_loss_pct: m === "forex" ? "0.5" : "2",
-      take_profit_pct: m === "forex" ? "1" : "4",
-      paper_quote_balance: m === "forex" ? "10000" : "1000",
+      order_lots: cfg.lots,
+      stop_loss_pct: cfg.sl,
+      take_profit_pct: cfg.tp,
+      paper_quote_balance: cfg.paper,
     }));
   }
 
@@ -80,12 +130,12 @@ export default function NewBotPage() {
       symbol: form.symbol.trim().toUpperCase().replace("/", ""),
       strategy,
       params: cleanParams(params),
-      allow_short: forex && form.allow_short,
+      allow_short: margin && form.allow_short,
       exec_mode: form.exec_mode,
       venue: form.venue,
       credential_id: needsCred ? form.credential_id || null : null,
-      order_size_quote: forex ? null : form.order_size_quote,
-      order_lots: forex ? form.order_lots : null,
+      order_size_quote: margin ? null : form.order_size_quote,
+      order_lots: margin ? form.order_lots : null,
       stop_loss_pct: form.stop_loss_pct || null,
       take_profit_pct: form.take_profit_pct || null,
       max_daily_loss_quote: form.max_daily_loss_quote || null,
@@ -112,16 +162,13 @@ export default function NewBotPage() {
         <fieldset>
           <legend>Mercado</legend>
           <div className="choice">
-            <label>
-              <input type="radio" name="market" checked={!forex} onChange={() => chooseMarket("crypto")} />
-              Cripto
-              <span className="hint">Binance à vista. Compra e vende o que tem.</span>
-            </label>
-            <label>
-              <input type="radio" name="market" checked={forex} onChange={() => chooseMarket("forex")} />
-              Forex
-              <span className="hint">Corretoras com cTrader. Opera comprado e vendido, em lotes.</span>
-            </label>
+            {(Object.keys(MARKETS) as Market[]).map((key) => (
+              <label key={key}>
+                <input type="radio" name="market" checked={form.market === key} onChange={() => chooseMarket(key)} />
+                {MARKETS[key].label}
+                <span className="hint">{MARKETS[key].hint}</span>
+              </label>
+            ))}
           </div>
         </fieldset>
 
@@ -164,14 +211,35 @@ export default function NewBotPage() {
             Nome do robô
             <input required maxLength={80} value={form.name} onChange={set("name")} />
           </label>
-          <label>
-            {forex ? "Símbolo" : "Par"}
-            <span className="hint">{forex ? "Como aparece no cTrader, ex.: EURUSD, GBPUSD, XAUUSD" : "Formato da Binance, ex.: BTCUSDT, ETHUSDT"}</span>
-            <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
-          </label>
+          {b3 ? (
+            <label>
+              Ativo
+              <span className="hint">{B3_SYMBOLS.find((x) => x.id === form.symbol)?.hint} O robô opera sempre o vencimento atual e troca sozinho perto do vencimento.</span>
+              <select value={form.symbol} onChange={set("symbol")}>
+                {B3_SYMBOLS.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label>
+              {forex ? "Símbolo" : "Par"}
+              <span className="hint">{forex ? "Como aparece no cTrader, ex.: EURUSD, GBPUSD, XAUUSD" : "Formato da Binance, ex.: BTCUSDT, ETHUSDT"}</span>
+              <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
+            </label>
+          )}
         </div>
 
-        {forex && (
+        {b3 && selected?.style === "day" && (
+          <p className="notice small">
+            <strong>Day trade na B3</strong>
+            O robô zera a posição 10 minutos antes do fim do pregão e não abre posição nova nos últimos 15 minutos. Só opera em dias úteis, das 9h05 às 18h20.
+          </p>
+        )}
+
+        {margin && (
           <fieldset>
             <legend>Direção</legend>
             <div className="choice">
@@ -221,7 +289,13 @@ export default function NewBotPage() {
                         ? "Conta demo da sua corretora no cTrader."
                         : forex && v === "live"
                           ? "Ordens reais na sua conta cTrader."
-                          : VENUE_HINT[v]}
+                          : b3 && v === "paper"
+                            ? "Preços reais da B3 pelo seu MetaTrader 5, saldo fictício."
+                            : b3 && v === "testnet"
+                              ? "Conta demo da sua corretora no MetaTrader 5."
+                              : b3 && v === "live"
+                                ? "Ordens reais na sua conta da B3."
+                                : VENUE_HINT[v]}
                   </span>
                 </label>
               );
@@ -236,8 +310,8 @@ export default function NewBotPage() {
           {needsCred &&
             (venueCreds.length ? (
               <label>
-                {forex ? "Conta cTrader" : "Credencial da Binance"}
-                {forex && form.venue === "paper" && <span className="hint">Usada só para as cotações; nenhuma ordem vai para ela.</span>}
+                {m.credLabel}
+                {margin && form.venue === "paper" && <span className="hint">Usada só para as cotações; nenhuma ordem vai para ela.</span>}
                 <select required value={form.credential_id} onChange={set("credential_id")}>
                   <option value="">Escolha…</option>
                   {venueCreds.map((c) => (
@@ -249,9 +323,9 @@ export default function NewBotPage() {
               </label>
             ) : (
               <p className="notice small">
-                Nenhuma {forex ? "conta cTrader" : `chave de ${venueLabel(form.venue).toLowerCase()}`} conectada para este ambiente.{" "}
+                Nenhuma {margin ? m.credMissing : `chave de ${venueLabel(form.venue).toLowerCase()}`} conectada para este ambiente.{" "}
                 <Link href="/painel/corretora">Conectar corretora</Link>
-                {!forex && form.venue === "live" && (
+                {form.market === "crypto" && form.venue === "live" && (
                   <>
                     {" "}
                     <BinanceSignup compact />
@@ -262,7 +336,7 @@ export default function NewBotPage() {
           {form.venue === "live" && (
             <p className="notice notice-danger small">
               <strong>Dinheiro de verdade</strong>
-              As ordens deste robô usam o saldo da sua conta{forex ? " e a alavancagem dela" : ""}. Para ligar, é preciso 2FA ativo e o termo de risco aceito.
+              As ordens deste robô usam o saldo da sua conta{forex ? " e a alavancagem dela" : b3 ? " e a margem de garantia exigida pela corretora" : ""}. Para ligar, é preciso 2FA ativo e o termo de risco aceito.
             </p>
           )}
         </fieldset>
@@ -270,7 +344,13 @@ export default function NewBotPage() {
         <fieldset>
           <legend>Tamanho e limites de risco</legend>
           <div className="grid-2">
-            {forex ? (
+            {b3 ? (
+              <label>
+                Contratos por ordem
+                <span className="hint">O conector no seu computador também tem um limite máximo por ordem.</span>
+                <input type="number" required min="1" max="100" step="1" value={form.order_lots} onChange={set("order_lots")} />
+              </label>
+            ) : forex ? (
               <label>
                 Lotes por ordem
                 <span className="hint">0,01 = micro lote (1.000 unidades da moeda base, na maioria das corretoras).</span>
@@ -288,17 +368,23 @@ export default function NewBotPage() {
             </label>
             <label>
               Stop loss (%)
-              <span className="hint">{forex ? "Enviado à corretora junto com a ordem. 0,5% ≈ 50 pips no EURUSD." : "Vende se cair isso desde a compra. Vazio desliga."}</span>
+              <span className="hint">
+                {b3
+                  ? "Enviado ao MetaTrader 5 junto com a ordem; o robô também vigia. 0,5% ≈ 650 pontos no WIN."
+                  : forex
+                    ? "Enviado à corretora junto com a ordem. 0,5% ≈ 50 pips no EURUSD."
+                    : "Vende se cair isso desde a compra. Vazio desliga."}
+              </span>
               <input type="number" min="0.01" max="50" step="any" value={form.stop_loss_pct} onChange={set("stop_loss_pct")} />
             </label>
             <label>
               Alvo de lucro (%)
-              <span className="hint">{forex ? "Também fica na corretora, mesmo se o sistema cair." : "Vende se subir isso desde a compra. Vazio desliga."}</span>
+              <span className="hint">{margin ? "Também fica na corretora, mesmo se o sistema cair." : "Vende se subir isso desde a compra. Vazio desliga."}</span>
               <input type="number" min="0.01" max="500" step="any" value={form.take_profit_pct} onChange={set("take_profit_pct")} />
             </label>
             <label>
               Perda máxima no dia
-              <span className="hint">Na moeda da conta. Ao atingir, o robô pausa até você religar.</span>
+              <span className="hint">{b3 ? "Em reais." : "Na moeda da conta."} Ao atingir, o robô pausa até você religar.</span>
               <input type="number" min="1" step="any" value={form.max_daily_loss_quote} onChange={set("max_daily_loss_quote")} />
             </label>
           </div>

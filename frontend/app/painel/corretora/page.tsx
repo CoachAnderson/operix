@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { date } from "@/lib/format";
 import type { Credential } from "@/lib/types";
 import { BinanceSignup } from "@/components/BinanceSignup";
+import { Mt5Connect } from "@/components/Mt5Connect";
 
 function BrokerView() {
   const back = useSearchParams().get("ctrader");
@@ -79,11 +80,29 @@ function BrokerView() {
                 {list.data.map((c) => (
                   <tr key={c.id}>
                     <td>{c.label}</td>
-                    <td>{c.exchange === "ctrader" ? `cTrader${c.broker_name ? ` (${c.broker_name})` : ""}` : "Binance"}</td>
-                    <td><VenueTag venue={c.venue} market={c.exchange === "ctrader" ? "forex" : "crypto"} /></td>
-                    <td>{c.exchange === "ctrader" ? `conta ${c.external_account_id}` : `chave …${c.key_last4}`}</td>
                     <td>
-                      {c.can_trade ? "Negociação" : <span className="loss">Só leitura</span>}
+                      {c.exchange === "ctrader"
+                        ? `cTrader${c.broker_name ? ` (${c.broker_name})` : ""}`
+                        : c.exchange === "mt5"
+                          ? `MetaTrader 5${c.broker_name ? ` (${c.broker_name})` : ""}`
+                          : "Binance"}
+                    </td>
+                    <td><VenueTag venue={c.venue} market={c.exchange === "ctrader" ? "forex" : c.exchange === "mt5" ? "b3" : "crypto"} /></td>
+                    <td>
+                      {c.exchange === "binance"
+                        ? `chave …${c.key_last4}`
+                        : c.external_account_id
+                          ? `conta ${c.external_account_id}`
+                          : <span className="muted">aguardando o conector</span>}
+                    </td>
+                    <td>
+                      {c.can_trade ? (
+                        "Negociação"
+                      ) : c.exchange === "mt5" ? (
+                        <span className="loss">{c.verified_at ? "Algo Trading desligado" : "Aguardando o conector"}</span>
+                      ) : (
+                        <span className="loss">Só leitura</span>
+                      )}
                       {c.exchange === "binance" && c.venue === "live" && !c.ip_restricted && <div className="loss small">sem restrição de IP</div>}
                     </td>
                     <td>{date(c.verified_at)}</td>
@@ -98,6 +117,8 @@ function BrokerView() {
         )}
         <ErrorText>{action.error}</ErrorText>
       </section>
+
+      <Mt5Connect creds={list.data ?? []} onChange={() => void list.reload()} />
 
       <section className="section">
         <h2 style={{ marginBottom: 6 }}>Forex com cTrader</h2>

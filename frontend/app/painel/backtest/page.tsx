@@ -11,6 +11,13 @@ import { api } from "@/lib/api";
 import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
 import type { BotSummary, Credential, Market, StrategyInfo } from "@/lib/types";
 
+/** Custos padrão por mercado (taxa por lado em % e escorregamento em centésimos de %). */
+const MARKET_COSTS: Record<Market, { fee_pct: string; slippage_bps: string }> = {
+  crypto: { fee_pct: "0.1", slippage_bps: "5" },
+  forex: { fee_pct: "0.003", slippage_bps: "0.5" },
+  b3: { fee_pct: "0.0015", slippage_bps: "0.6" },
+};
+
 interface Metrics {
   trades: number;
   wins: number;
@@ -123,9 +130,9 @@ function BacktestView() {
           credential_id: bot.credential_id ?? "",
           order_lots: bot.order_lots ?? f.order_lots,
           allow_short: bot.allow_short,
-          fee_pct: bot.market === "forex" ? "0.003" : f.fee_pct,
-          slippage_bps: bot.market === "forex" ? "0.5" : f.slippage_bps,
-          initial_balance: bot.market === "forex" ? "10000" : f.initial_balance,
+          fee_pct: MARKET_COSTS[bot.market].fee_pct,
+          slippage_bps: MARKET_COSTS[bot.market].slippage_bps,
+          initial_balance: bot.market === "crypto" ? f.initial_balance : "10000",
           symbol: bot.symbol,
           order_size_quote: bot.order_size_quote ?? f.order_size_quote,
           stop_loss_pct: bot.stop_loss_pct ?? "",
@@ -145,19 +152,25 @@ function BacktestView() {
 
   const selected = strategies?.find((s) => s.code === strategy);
   const forex = form.market === "forex";
+  const isB3 = form.market === "b3";
+  const margin = form.market !== "crypto";
   const ctCreds = creds?.filter((c) => c.exchange === "ctrader") ?? [];
+  const mt5Creds = creds?.filter((c) => c.exchange === "mt5") ?? [];
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
 
   function chooseMarket(m: Market) {
     setForm((f) => ({
       ...f,
       market: m,
-      symbol: m === "forex" ? "EURUSD" : "BTCUSDT",
-      fee_pct: m === "forex" ? "0.003" : "0.1",
-      slippage_bps: m === "forex" ? "0.5" : "5",
-      stop_loss_pct: m === "forex" ? "0.5" : "2",
-      take_profit_pct: m === "forex" ? "1" : "4",
-      initial_balance: m === "forex" ? "10000" : "1000",
+      credential_id: "",
+      symbol: { crypto: "BTCUSDT", forex: "EURUSD", b3: "WIN" }[m],
+      order_lots: m === "b3" ? "1" : "0.10",
+      allow_short: m !== "crypto",
+      fee_pct: MARKET_COSTS[m].fee_pct,
+      slippage_bps: MARKET_COSTS[m].slippage_bps,
+      stop_loss_pct: m === "crypto" ? "2" : "0.5",
+      take_profit_pct: m === "crypto" ? "4" : "1",
+      initial_balance: m === "crypto" ? "1000" : "10000",
     }));
   }
 
@@ -172,9 +185,9 @@ function BacktestView() {
       strategy,
       params: cleanParams(params),
       market: form.market,
-      credential_id: forex ? form.credential_id || null : null,
-      order_lots: forex ? Number(form.order_lots) : null,
-      allow_short: forex && form.allow_short,
+      credential_id: margin ? form.credential_id || null : null,
+      order_lots: margin ? Number(form.order_lots) : null,
+      allow_short: margin && form.allow_short,
       symbol: form.symbol.trim().toUpperCase().replace("/", ""),
       start: form.start,
       end: form.end,
@@ -196,14 +209,32 @@ function BacktestView() {
     <>
       <PageHead
         title="Backtest"
-        lead={botName ? `Testando a configuração do robô ${botName} no histórico.` : "Teste uma estratégia no histórico da Binance antes de ligar um robô."}
+        lead={botName ? `Testando a configuração do robô ${botName} no histórico.` : "Teste uma estratégia no histórico (Binance, cTrader ou MetaTrader 5) antes de ligar um robô."}
       />
       <div className="bt-layout">
         <form className="form panel" onSubmit={run}>
           <div className="presets" role="group" aria-label="Mercado">
-            <button type="button" className="btn" aria-pressed={!forex} onClick={() => chooseMarket("crypto")}>Cripto (Binance)</button>
+            <button type="button" className="btn" aria-pressed={form.market === "crypto"} onClick={() => chooseMarket("crypto")}>Cripto (Binance)</button>
             <button type="button" className="btn" aria-pressed={forex} onClick={() => chooseMarket("forex")}>Forex (cTrader)</button>
+            <button type="button" className="btn" aria-pressed={isB3} onClick={() => chooseMarket("b3")}>Futuros B3 (MT5)</button>
           </div>
+          {isB3 &&
+            (mt5Creds.length ? (
+              <label>
+                Conexão do MetaTrader 5 (fonte do histórico)
+                <span className="hint">O conector precisa estar aberto. O histórico vem da série contínua da sua corretora.</span>
+                <select required value={form.credential_id} onChange={set("credential_id")}>
+                  <option value="">Escolha…</option>
+                  {mt5Creds.map((c) => (
+                    <option key={c.id} value={c.id}>{c.label}</option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <p className="notice small">
+                Conecte o MetaTrader 5 em <Link href="/painel/corretora">Corretora</Link> para baixar o histórico da B3.
+              </p>
+            ))}
           {forex &&
             (ctCreds.length ? (
               <label>
@@ -244,11 +275,21 @@ function BacktestView() {
             </select>
           </label>
           {selected && <StrategyParamsFields strategy={selected} params={params} onChange={setParams} />}
-          <label>
-            {forex ? "Símbolo" : "Par"}
-            <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
-          </label>
-          {forex && (
+          {isB3 ? (
+            <label>
+              Ativo
+              <select value={form.symbol} onChange={set("symbol")}>
+                <option value="WIN">WIN · Mini Ibovespa</option>
+                <option value="WDO">WDO · Mini dólar</option>
+              </select>
+            </label>
+          ) : (
+            <label>
+              {forex ? "Símbolo" : "Par"}
+              <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
+            </label>
+          )}
+          {margin && (
             <label className="check">
               <input type="checkbox" checked={form.allow_short} onChange={(e) => setForm({ ...form, allow_short: e.target.checked })} />
               <span>Operar também vendido</span>
@@ -279,7 +320,12 @@ function BacktestView() {
               Saldo inicial
               <input type="number" min="10" step="any" required value={form.initial_balance} onChange={set("initial_balance")} />
             </label>
-            {forex ? (
+            {isB3 ? (
+              <label>
+                Contratos por ordem
+                <input type="number" min="1" step="1" required value={form.order_lots} onChange={set("order_lots")} />
+              </label>
+            ) : forex ? (
               <label>
                 Lotes por ordem
                 <input type="number" min="0.01" step="0.01" required value={form.order_lots} onChange={set("order_lots")} />
@@ -358,7 +404,8 @@ function EmptyResult() {
 
 function ResultView({ r }: { r: Result }) {
   const m = r.metrics;
-  const unit = r.market === "forex" ? "" : r.symbol.endsWith("USDT") ? " USDT" : "";
+  const unit = r.market === "b3" ? "" : r.market === "forex" ? "" : r.symbol.endsWith("USDT") ? " USDT" : "";
+  const pre = r.market === "b3" ? "R$ " : "";
   const range = `${new Date(r.start).toLocaleDateString("pt-BR")} a ${new Date(r.end).toLocaleDateString("pt-BR")}`;
   const beat = m.return_pct - m.buy_hold_pct;
 
@@ -371,8 +418,8 @@ function ResultView({ r }: { r: Result }) {
           <>
             Em <strong>{m.trades} operações</strong>
             {m.short_trades > 0 && ` (${m.long_trades} compradas e ${m.short_trades} vendidas)`} em {r.symbol} ({r.timeframe}) de {range}, o robô acertou{" "}
-            <strong>{money(m.win_rate_pct, 1)}%</strong> e o saldo foi de {money(r.config.initial_balance)} para{" "}
-            <strong className={pnlClass(m.net_pnl)}>{money(m.final_balance)}{unit}</strong> ({pct(m.return_pct)}). Comprar e segurar o
+            <strong>{money(m.win_rate_pct, 1)}%</strong> e o saldo foi de {pre}{money(r.config.initial_balance)} para{" "}
+            <strong className={pnlClass(m.net_pnl)}>{pre}{money(m.final_balance)}{unit}</strong> ({pct(m.return_pct)}). Comprar e segurar o
             mesmo tamanho de posição daria {pct(m.buy_hold_pct)}
             {beat >= 0 ? `; o robô ficou ${money(beat)} pontos percentuais acima.` : `, ${money(-beat)} pontos percentuais acima do robô.`}
           </>
@@ -424,7 +471,7 @@ function ResultView({ r }: { r: Result }) {
         <section style={{ display: "grid", gap: 10 }}>
           <h2>Evolução do saldo</h2>
           <EquityChart points={r.equity} initial={r.config.initial_balance} />
-          <p className="muted small">Taxas pagas no período: {money(m.fees_total)}{unit}. {r.candles.toLocaleString("pt-BR")} candles analisados.</p>
+          <p className="muted small">Taxas pagas no período: {pre}{money(m.fees_total)}{unit}. {r.candles.toLocaleString("pt-BR")} candles analisados.</p>
         </section>
       )}
 

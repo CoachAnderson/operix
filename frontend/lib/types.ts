@@ -1,5 +1,5 @@
 export type Venue = "paper" | "testnet" | "live";
-export type Market = "crypto" | "forex";
+export type Market = "crypto" | "forex" | "b3";
 export type ExecMode = "auto" | "signals";
 export type BotStatus = "stopped" | "running" | "paused_risk" | "paused_billing" | "error";
 
@@ -38,7 +38,7 @@ export interface Subscription {
 export interface Credential {
   id: string;
   label: string;
-  exchange: "binance" | "ctrader";
+  exchange: "binance" | "ctrader" | "mt5";
   venue: Venue;
   broker_name: string | null;
   external_account_id: string | null;
@@ -128,4 +128,14 @@ export interface ReportSymbol {
   open: boolean;
   open_sides: ("long" | "short")[];
   bots: number;
+}
+
+export interface Mt5Status {
+  credential_id: string;
+  online: boolean;
+  last_seen: string | null;
+  account: { login: number; server: string; company: string; name: string; currency: string; trade_mode: number; trade_allowed: boolean } | null;
+  terminal: { trade_allowed: boolean; connected: boolean; build: number | null } | null;
+  limits: { roots: string[]; max_contracts: number } | null;
+  agent_version: string | null;
 }

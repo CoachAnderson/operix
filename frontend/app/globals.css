@@ -508,3 +508,15 @@ details summary { cursor: pointer; font-weight: 600; }
 .learn-side-link:hover { border-color: var(--muted); }
 
 .lv-curve path, .lv-curve line { vector-effect: non-scaling-stroke; }
+
+/* MetaTrader 5 */
+.mt5-token { display: flex; gap: 8px; }
+.mt5-token input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; min-width: 0; flex: 1; }
+.mt5-list { display: grid; gap: 10px; }
+.mt5-card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 14px 16px; display: grid; gap: 10px; }
+.mt5-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mt5-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--loss); flex: none; }
+.mt5-dot.on { background: var(--gain); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gain) 25%, transparent); }
+.mt5-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px 16px; }
+.mt5-facts dt { font-size: var(--step--1); color: var(--muted); }
+.mt5-facts dd { margin: 2px 0 0; font-weight: 550; }

@@ -14,9 +14,10 @@ const STUDIES: Record<string, string[]> = {
  * Gráfico avançado do TradingView (widget gratuito, dados do próprio TradingView: BINANCE:<par> ou FX:<par>).
  * Mostra o mercado com todas as ferramentas do TradingView; as ordens do robô ficam na tabela abaixo.
  */
-export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h", strategy, heading }: { symbol: string; market?: "crypto" | "forex"; timeframe?: string; strategy?: string; heading?: React.ReactNode }) {
+export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h", strategy, heading }: { symbol: string; market?: "crypto" | "forex" | "b3"; timeframe?: string; strategy?: string; heading?: React.ReactNode }) {
   // Forex: cotação agregada do TradingView (FX:). As cotações da sua corretora podem diferir alguns pontos.
-  const tvSymbol = market === "forex" ? `FX:${symbol}` : `BINANCE:${symbol}`;
+  // B3: série contínua do vencimento atual (WIN1!, WDO1!). O widget gratuito mostra a B3 com atraso.
+  const tvSymbol = market === "forex" ? `FX:${symbol}` : market === "b3" ? `BMFBOVESPA:${symbol}1!` : `BINANCE:${symbol}`;
   const box = useRef<HTMLDivElement>(null);
   const [dark, setDark] = useState(false);
 

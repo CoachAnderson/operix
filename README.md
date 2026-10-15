@@ -8,6 +8,7 @@ Arquitetura, modelo de dados e decisões de segurança: [`docs/ARQUITETURA.md`](
 - **Assinante**: cadastro, login com 2FA (TOTP), planos e assinatura recorrente, conexão de chaves da Binance (cifradas), criação e controle de robôs, caixa de sinais, histórico de ordens, termo de risco, troca de senha e exclusão de conta (LGPD).
 - **Robôs**: 4 estratégias (2 de day trade, 2 de swing trade), modalidade **automática** ou **por sinais**, e três ambientes: **simulação** (preço real, saldo fictício), **testnet/conta demo** e **conta real**.
 - **Forex (cTrader)**: opera comprado e vendido, tamanho em lotes, stop e alvo enviados à corretora junto com a ordem, horário de mercado respeitado e fechamentos feitos pela corretora (stop, alvo, stop-out) reconciliados automaticamente.
+- **Futuros da B3 (MetaTrader 5)**: mini-índice (WIN) e mini-dólar (WDO) pela corretora do próprio cliente, com o Conector OráculoInvest rodando no Windows dele. Vencimento atual escolhido sozinho, rolagem perto do vencimento, day trade zerado antes do fim do pregão, contratos inteiros e custos da B3 na simulação e no backtest.
 - **Risco**: stop loss, alvo, tempo máximo posicionado, perda máxima diária (pausa o robô), limite de ordens por dia, botão de encerrar posição e parada geral (kill switch) do admin.
 - **Backtest**: testa qualquer estratégia (ou a configuração de um robô) no histórico da Binance, sem olhar o futuro, com taxa e slippage. Mostra taxa de acerto, resultado médio por operação, ganho médio ÷ perda média, fator de lucro, queda máxima, comparação com comprar e segurar, resultado mês a mês e as operações no gráfico de candles.
 - **Aprender** (`/aprender`, aberto ao público): trilha de 17 aulas de 3 a 5 minutos em 4 módulos (primeiros passos, gráficos, estratégias, risco e robôs), com 14 gráficos interativos (dados fictícios), quiz em cada aula, progresso salvo no navegador e glossário com busca. Conteúdo em `frontend/lib/learn/lessons.ts`; para criar uma aula, basta acrescentar um item lá.
@@ -53,7 +54,7 @@ npm run dev                              # http://localhost:3000
 ## Testes
 
 ```bash
-cd backend && pytest        # 41 testes: segurança, webhook, Binance, cTrader (servidor simulado), estratégias, motor, backtest, relatórios e API
+cd backend && pytest        # 45 testes: segurança, webhook, Binance, cTrader (servidor simulado), MetaTrader 5 (terminal simulado), estratégias, motor, backtest, relatórios e API
 cd frontend && npm run build
 ```
 
@@ -83,6 +84,24 @@ Detalhes técnicos:
 - O token de acesso vale cerca de 30 dias; o sistema renova com o refresh token alguns dias antes, sob trava no Redis, e atualiza todas as contas que dividiam o mesmo token.
 - A simulação de forex usa a conta cTrader do cliente só para cotações e regras do símbolo (tamanho do lote, volume mínimo, horário).
 - Robôs de forex em conta real dependem da alavancagem da corretora: confira os limites de risco antes de ligar.
+
+## Futuros da B3 com MetaTrader 5
+
+Pessoa física não tem API direta com a B3; o caminho é o MetaTrader 5 que a corretora já oferece (XP, Clear, Rico, Genial e outras). O MetaTrader 5 só roda no Windows, logado na conta do cliente, então a ligação é feita por um programa pequeno que fica ao lado dele:
+
+```
+robô (worker) ──Redis──▶ API ◀──HTTPS (o conector consulta a cada 25 s)── Conector OráculoInvest ──▶ MetaTrader 5 do cliente ──▶ B3
+```
+
+- **Conector** (`conector-mt5/`): Python com o pacote oficial `MetaTrader5`. Só abre conexões de saída, então não precisa abrir porta no roteador. Login e senha da corretora nunca saem do computador do cliente; o servidor guarda só o hash de um token do conector.
+- **Travas locais** que o servidor não consegue mudar (`conector.ini`): ativos liberados (padrão WIN, WDO) e máximo de contratos por ordem. O conector não soma posição em cima de outra já aberta no contrato e só fecha posições que ele mesmo abriu (número mágico).
+- **Demo × real**: o servidor confere o tipo de conta informado pelo MetaTrader 5 e recusa o conector de conta demo numa conta real (e o contrário). Também recusa trocar a conta depois de vinculada.
+- **Comandos com prazo**: ordem não entregue a tempo é descartada pelo servidor; sem resposta, a ordem fica "conferindo" e é reconciliada pelo comentário (`OI…`) no histórico do MT5.
+- **Vencimentos**: o conector escolhe o contrato com vencimento mais próximo e passa para o seguinte quando faltam 3 dias. Posição de swing num contrato que está vencendo é encerrada ("Rolagem") e a estratégia reentra no novo.
+- **Horário**: entradas das 9h05 às 18h20 (Brasília), em dias úteis. Robôs de day trade zeram 10 minutos antes do fim e não abrem nos últimos 15. Feriados da B3 não estão no calendário: a corretora recusa a ordem e o robô tenta no próximo ciclo.
+- **Distribuição**: o painel oferece `frontend/public/downloads/conector-oraculoinvest-mt5.zip` (gerado por `conector-mt5/empacotar.sh`). Para entregar um `.exe` que dispensa Python, rode `gerar_exe.bat` num Windows e coloque o resultado no lugar do .zip.
+- **Antes da conta real**: teste o conector com a conta demo da sua corretora e confira se ela mantém o comentário das ordens e se a série contínua (`WIN$N`, `WIN$` ou `WIN@N`) existe; sem ela o histórico vem só do contrato atual.
+- **Redis obrigatório em produção**: worker e API conversam pela fila do Redis (o `memory://` só serve para testes num único processo).
 
 ## TradingView
 

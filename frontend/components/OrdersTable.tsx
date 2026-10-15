@@ -1,6 +1,6 @@
 "use client";
 
-import { dateTime, money, price, pnlClass, qty, signed } from "@/lib/format";
+import { B3_POINT_VALUE, dateTime, money, price, pnlClass, qty, signed } from "@/lib/format";
 import type { Order } from "@/lib/types";
 import { VenueTag } from "./ui";
 
@@ -43,7 +43,8 @@ export function OrdersTable({ orders, showVenue = false }: { orders: Order[]; sh
               )}
               <td>{o.symbol}</td>
               <td className={`side-${o.side}`}>{o.side === "BUY" ? "Compra" : "Venda"}</td>
-              <td className="num">{qty(o.qty)}</td>
+              {/* Futuros da B3: o motor guarda pontos × valor do ponto; aqui mostra contratos */}
+              <td className="num">{B3_POINT_VALUE[o.symbol] ? `${qty(Number(o.qty) / B3_POINT_VALUE[o.symbol])} contr.` : qty(o.qty)}</td>
               <td className="num">{price(o.price)}</td>
               <td className="num">{money(o.fee_quote, 4)}</td>
               <td className={`num ${pnlClass(o.realized_pnl)}`}>{o.realized_pnl ? signed(o.realized_pnl) : ""}</td>
