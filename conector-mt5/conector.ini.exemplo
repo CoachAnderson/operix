@@ -1,0 +1,22 @@
+; Conector OráculoInvest para MetaTrader 5 (futuros da B3)
+; Copie este arquivo para conector.ini e preencha o token.
+
+[servidor]
+; Endereço da plataforma
+url = https://app.seudominio.com.br
+; Token gerado no painel: Corretora → MetaTrader 5 → Criar conexão (aparece uma vez só)
+token =
+
+[metatrader]
+; Deixe vazio para usar o MetaTrader 5 que já está aberto.
+; Se tiver mais de um instalado, informe o caminho, ex.: C:\Program Files\MetaTrader 5\terminal64.exe
+caminho =
+; Fuso do servidor da corretora em horas (B3 = -3). "auto" mede pela cotação durante o pregão.
+fuso_servidor = auto
+
+[limites]
+; Travas locais: o servidor não consegue passar delas.
+; Ativos que o robô pode operar nesta conta
+ativos = WIN,WDO
+; Máximo de contratos por ordem
+max_contratos = 5

@@ -6,6 +6,7 @@ import asyncio
 import re
 import unicodedata
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ from app.api.deps import DB, CurrentUser
 from app.core.config import get_settings
 from app.core.ratelimit import client_ip, hit
 from app.models import Bot, Market, Order, OrderStatus, Position, PosSide, Venue
+from app.services import b3
 from app.services.audit import audit
 from app.services.report_pdf import TZ, OpenRow, OrderRow, ReportData, render
 
@@ -103,6 +105,12 @@ async def report_pdf(
     rows = (await db.execute(q)).all()
     truncated = len(rows) > MAX_ORDERS
     rows = list(reversed(rows[:MAX_ORDERS]))  # ordem cronológica no PDF
+    def contracts(qty, bot: Bot):
+        """Futuros da B3: converte a quantidade interna (pontos × valor do ponto) em contratos."""
+        if bot.market == Market.b3 and bot.symbol.upper() in b3.FUTURES:
+            return qty / Decimal(str(b3.FUTURES[bot.symbol.upper()].point_value))
+        return qty
+
     orders = [
         OrderRow(
             created_at=o.created_at,
@@ -111,7 +119,7 @@ async def report_pdf(
             market=b.market.value,
             venue=o.venue.value,
             side=o.side.value,
-            qty=o.qty,
+            qty=contracts(o.qty, b),
             price=o.price,
             fee=o.fee_quote or 0,
             pnl=o.realized_pnl,
@@ -133,7 +141,7 @@ async def report_pdf(
             market=b.market.value,
             venue=b.venue.value,
             side=p.side.value,
-            qty=p.qty,
+            qty=contracts(p.qty, b),
             avg_price=p.avg_price,
             opened_at=p.opened_at,
         )

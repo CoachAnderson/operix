@@ -28,6 +28,10 @@ def permission_problem(user: User, plan: Plan | None, bot: Bot) -> Problem | Non
             return Problem("config", "Ative a verificação em duas etapas para operar em conta real")
         if not user.risk_terms_accepted_at:
             return Problem("config", "Aceite o termo de ciência de risco para operar em conta real")
-    if (bot.venue != Venue.paper or bot.market == Market.forex) and not bot.credential_id:
-        return Problem("config", "Conecte uma conta cTrader a este robô" if bot.market == Market.forex else "Conecte uma credencial da Binance a este robô")
+    if (bot.venue != Venue.paper or bot.market != Market.crypto) and not bot.credential_id:
+        msg = {
+            Market.forex: "Conecte uma conta cTrader a este robô",
+            Market.b3: "Conecte o MetaTrader 5 (conector OráculoInvest) a este robô",
+        }.get(bot.market, "Conecte uma credencial da Binance a este robô")
+        return Problem("config", msg)
     return None

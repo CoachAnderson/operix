@@ -164,7 +164,7 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             if not rules.is_open():
                 raise ExecutionBlocked(f"Mercado de {bot.symbol} fechado agora")
 
-        units = bot.order_lots * rules.lot_size if (opening and bot.market == Market.forex and bot.order_lots) else None
+        units = bot.order_lots * rules.lot_size if (opening and bot.market != Market.crypto and bot.order_lots) else None
         order = Order(
             bot_id=bot.id,
             user_id=bot.user_id,

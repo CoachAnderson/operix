@@ -6,10 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import crypto
 from app.models import Bot, ExchangeCredential, Market, Venue
-from app.services import ctrader_auth
+from app.services import b3, ctrader_auth
 from app.services.brokers.base import Broker, BrokerError
 from app.services.brokers.binance import BinanceClient
 from app.services.brokers.ctrader import CTraderBroker, get_connection
+from app.services.brokers.mt5 import MT5Broker
 from app.services.brokers.paper import PaperAccount, PaperBroker
 
 
@@ -42,6 +43,21 @@ async def _credential(db: AsyncSession, bot: Bot) -> ExchangeCredential:
 
 
 async def broker_for_bot(db: AsyncSession, bot: Bot) -> Broker:
+    if bot.market == Market.b3:
+        # Futuros da B3: o MetaTrader 5 do cliente (via conector) é a fonte de cotações também na simulação.
+        cred = await _credential(db, bot)
+        if cred.exchange != "mt5":
+            raise BrokerError("Robô da B3 precisa de uma conexão com o MetaTrader 5")
+        broker = MT5Broker(cred.id, cred.venue.value)
+        if bot.venue == Venue.paper:
+            f = b3.info(bot.symbol)
+            return PaperBroker(broker, PaperAccount(bot.paper_quote_balance, Decimal("0")), fee_rate=f.fee_rate, slippage_bps=f.slippage_bps, margin=True)
+        if cred.venue != bot.venue:
+            raise BrokerError("A conta do MetaTrader 5 não corresponde ao ambiente do robô (demo × real)")
+        if not cred.can_trade:
+            raise BrokerError("Negociação automática desligada no MetaTrader 5 (botão Algo Trading) ou conta sem permissão")
+        return broker
+
     if bot.market == Market.forex:
         # Forex usa a conta cTrader do cliente também na simulação (para cotações e regras do símbolo).
         cred = await _credential(db, bot)

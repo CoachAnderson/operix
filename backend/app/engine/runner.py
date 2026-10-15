@@ -16,7 +16,8 @@ from app.core.redis import get_redis
 from app.engine import executor
 from app.engine.guards import Problem, permission_problem
 from app.engine.risk import daily_stats, entry_block_reason, exit_reason, kill_switch_state
-from app.models import Bot, BotStatus, ExecMode, Side, Signal, SignalStatus, User
+from app.models import Bot, BotStatus, ExecMode, Market, Side, Signal, SignalStatus, User
+from app.services import b3
 from app.services.audit import audit
 from app.services.brokers.base import Broker, BrokerError
 from app.services.brokers.factory import broker_for_bot
@@ -107,6 +108,25 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
         price = await broker.get_price(bot.symbol)
         position = await executor.get_position(db, bot.id)
         bot.last_tick_at = now
+
+        # 4a) Futuros da B3: zera o day trade antes do fim do pregão e rola o contrato perto do vencimento
+        if bot.market == Market.b3:
+            rules = await broker.get_rules(bot.symbol)
+            info = b3.info(bot.symbol)
+            left = rules.minutes_to_close(now)
+            day = strategy.style == "day"
+            if position:
+                if position.external_id is None and rules.contract:
+                    position.external_id = f"{rules.contract}:0"  # simulação: guarda o contrato da entrada
+                held = (position.external_id or "").split(":")[0]
+                if day and left is not None and left <= info.flat_before_min:
+                    return await _act(db, bot, broker, executor.closing_side(position.side), price, "Encerramento do day trade antes do fim do pregão", now)
+                if held and rules.contract and held != rules.contract:
+                    reason = f"Rolagem: {held} perto do vencimento; o robô passa a operar {rules.contract}"
+                    return await _act(db, bot, broker, executor.closing_side(position.side), price, reason, now)
+            elif day and (left is None or left <= info.flat_before_min + 5):
+                await db.commit()
+                return TickResult("hold", "Fora do horário de entrada do day trade")
 
         # 4) Saídas por risco (avaliadas a cada ciclo, com o preço atual)
         if position:

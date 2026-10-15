@@ -1,6 +1,7 @@
 """Cliente Redis compartilhado, com fallback em memória para testes/desenvolvimento sem Redis."""
 from __future__ import annotations
 
+import asyncio
 import time
 
 from redis.asyncio import Redis
@@ -9,10 +10,11 @@ from app.core.config import get_settings
 
 
 class MemoryRedis:
-    """Implementa só o subconjunto usado pela aplicação (incr/expire/set nx/get/delete)."""
+    """Implementa só o subconjunto usado pela aplicação (incr/expire/set nx/get/delete e filas simples)."""
 
     def __init__(self) -> None:
         self._data: dict[str, tuple[str, float | None]] = {}
+        self._lists: dict[str, list[str]] = {}
 
     def _alive(self, key: str) -> bool:
         item = self._data.get(key)
@@ -45,7 +47,29 @@ class MemoryRedis:
         return False
 
     async def delete(self, *keys: str) -> int:
-        return sum(1 for k in keys if self._data.pop(k, None) is not None)
+        return sum(1 for k in keys if self._data.pop(k, None) is not None or self._lists.pop(k, None) is not None)
+
+    # Filas (usadas pelo conector do MetaTrader 5). Sem expiração: o chamador limpa o que cria.
+    async def rpush(self, key: str, *values: str) -> int:
+        lst = self._lists.setdefault(key, [])
+        lst.extend(str(v) for v in values)
+        return len(lst)
+
+    async def lpop(self, key: str) -> str | None:
+        lst = self._lists.get(key)
+        return lst.pop(0) if lst else None
+
+    async def blpop(self, keys: list[str] | str, timeout: float = 0) -> tuple[str, str] | None:
+        keys = [keys] if isinstance(keys, str) else list(keys)
+        deadline = time.monotonic() + (timeout or 0)
+        while True:
+            for k in keys:
+                v = await self.lpop(k)
+                if v is not None:
+                    return k, v
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(0.02)
 
     async def ping(self) -> bool:
         return True

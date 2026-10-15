@@ -52,6 +52,7 @@ class Venue(str, enum.Enum):
 class Market(str, enum.Enum):
     crypto = "crypto"  # Binance Spot
     forex = "forex"  # cTrader Open API
+    b3 = "b3"  # futuros da B3 via MetaTrader 5 do cliente (conector local)
 
 
 class PosSide(str, enum.Enum):
@@ -165,9 +166,10 @@ class ExchangeCredential(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     label: Mapped[str] = mapped_column(String(80))
-    exchange: Mapped[str] = mapped_column(String(20), default="binance")  # binance | ctrader
+    exchange: Mapped[str] = mapped_column(String(20), default="binance")  # binance | ctrader | mt5
     venue: Mapped[Venue] = mapped_column(_enum(Venue))  # testnet (Binance testnet / cTrader demo) ou live
     # Binance: chave e segredo. cTrader: access token e refresh token (OAuth).
+    # MT5: hash do token do conector (o login e a senha da corretora ficam só no computador do cliente).
     api_key_enc: Mapped[str] = mapped_column(Text)
     api_secret_enc: Mapped[str] = mapped_column(Text)
     # cTrader com app próprio do cliente: Client ID e Client Secret dele (cifrados). Vazio = app da plataforma.
@@ -229,7 +231,7 @@ class Position(Base):
     avg_price: Mapped[Decimal] = mapped_column(Qty)  # preço de entrada (referência de stop/alvo)
     cost_basis: Mapped[Decimal | None] = mapped_column(Qty)  # cripto à vista: total pago, com taxa
     entry_fee: Mapped[Decimal] = mapped_column(Qty, default=Decimal("0"))
-    external_id: Mapped[str | None] = mapped_column(String(40))  # cTrader: positionId
+    external_id: Mapped[str | None] = mapped_column(String(40))  # cTrader: positionId · MT5: "CONTRATO:ticket"
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

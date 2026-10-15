@@ -54,20 +54,27 @@ async def _get_bot(db, user, bot_id: uuid.UUID) -> Bot:
     return bot
 
 
+EXCHANGE_FOR = {Market.crypto: "binance", Market.forex: "ctrader", Market.b3: "mt5"}
+MISSING_CRED = {
+    Market.crypto: "Escolha uma credencial da Binance para este ambiente",
+    Market.forex: "Escolha uma conta cTrader (também usada para as cotações na simulação)",
+    Market.b3: "Escolha uma conexão do MetaTrader 5 (também usada para as cotações na simulação)",
+}
+
+
 async def _check_credential(db, user, credential_id: uuid.UUID | None, venue: Venue, market: Market = Market.crypto) -> None:
-    forex = market == Market.forex
-    if venue == Venue.paper and not forex:
+    if venue == Venue.paper and market == Market.crypto:
         return  # simulação de cripto usa dados públicos da Binance
     if not credential_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Escolha uma conta cTrader (também usada para as cotações na simulação)" if forex else "Escolha uma credencial da Binance para este ambiente",
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, MISSING_CRED[market])
     cred = await db.get(ExchangeCredential, credential_id)
     if not cred or cred.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Credencial não encontrada")
-    if cred.exchange != ("ctrader" if forex else "binance"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Para forex use uma conta cTrader; para cripto, uma chave da Binance")
+    if cred.exchange != EXCHANGE_FOR[market]:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Use a conexão certa para o mercado: Binance para cripto, cTrader para forex e MetaTrader 5 para a B3",
+        )
     if venue != Venue.paper and cred.venue != venue:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A credencial é de outro ambiente (demo/testnet × real)")
 
@@ -128,7 +135,7 @@ async def create_bot(body: BotIn, user: CurrentUser, plan: ActivePlan, request: 
         params=params,
         exec_mode=body.exec_mode,
         venue=body.venue,
-        credential_id=body.credential_id if (body.venue != Venue.paper or body.market == Market.forex) else None,
+        credential_id=body.credential_id if (body.venue != Venue.paper or body.market != Market.crypto) else None,
         order_size_quote=body.order_size_quote,
         order_lots=body.order_lots,
         stop_loss_pct=body.stop_loss_pct,
@@ -180,6 +187,8 @@ async def update_bot(bot_id: uuid.UUID, body: BotUpdate, user: CurrentUser, plan
         data["params"] = _validate_params(bot.strategy, data["params"])
     if venue == Venue.paper and bot.market == Market.crypto:
         data["credential_id"] = None
+    if bot.market == Market.b3 and data.get("order_lots") is not None and data["order_lots"] != data["order_lots"].to_integral_value():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Na B3 o tamanho é em contratos inteiros")
     if bot.market == Market.crypto:
         if data.get("allow_short"):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cripto à vista não opera vendido")

@@ -37,13 +37,15 @@ QUOTES = ("USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH", "BNB", "EUR", "TRY")
 
 
 def venue_label(venue: str, market: str) -> str:
-    return "Conta demo" if market == "forex" and venue == "testnet" else VENUE_LABEL.get(venue, venue)
+    return "Conta demo" if market in ("forex", "b3") and venue == "testnet" else VENUE_LABEL.get(venue, venue)
 
 
 def currency_of(symbol: str, market: str) -> str:
     """Moeda em que o resultado é medido: cotação do par (cripto) ou moeda da conta (forex)."""
     if market == "forex":
         return "moeda da conta"
+    if market == "b3":
+        return "R$"
     for q in QUOTES:
         if symbol.endswith(q) and len(symbol) > len(q):
             return q
@@ -361,7 +363,7 @@ def render(data: ReportData) -> bytes:
             rows.append(
                 [
                     r.symbol,
-                    "Forex" if r.market == "forex" else "Cripto",
+                    {"forex": "Forex", "b3": "Futuros B3"}.get(r.market, "Cripto"),
                     venue_label(r.venue, r.market),
                     str(r.orders),
                     str(r.closed),
@@ -433,7 +435,7 @@ def render(data: ReportData) -> bytes:
     # Notas
     notes = [
         "Resultado realizado: lucro ou prejuízo das operações encerradas, já descontadas as taxas de entrada e saída.",
-        "Cripto: resultado na moeda de cotação do par (por exemplo, USDT em BTCUSDT). Forex: na moeda da conta da corretora, já com swap e comissão informados por ela.",
+        "Cripto: resultado na moeda de cotação do par (por exemplo, USDT em BTCUSDT). Forex: na moeda da conta da corretora, já com swap e comissão informados por ela. Futuros da B3: em reais, com os custos informados pela corretora.",
         "Simulação, testnet e conta demo não movimentam dinheiro real; os números delas não representam ganhos ou perdas reais.",
         "Resultados passados não garantem resultados futuros. Este relatório não é recomendação de investimento.",
         "Para declaração de imposto de renda, confira os valores com os extratos da corretora.",

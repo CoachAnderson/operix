@@ -49,13 +49,30 @@ class SymbolRules:
     # Horário de negociação: intervalos em segundos desde domingo 00:00 no fuso schedule_tz. None = 24x7.
     schedule: tuple[tuple[int, int], ...] | None = None
     schedule_tz: str = "UTC"
+    # Futuros (B3): contrato em negociação (ex.: WINZ26) e o vencimento dele.
+    contract: str | None = None
+    expiration: datetime | None = None
+    currency: str | None = None
+
+    def _week_second(self, now: datetime | None) -> int:
+        now = (now or datetime.now(UTC)).astimezone(ZoneInfo(self.schedule_tz))
+        return ((now.weekday() + 1) % 7) * 86400 + now.hour * 3600 + now.minute * 60 + now.second  # domingo = 0
 
     def is_open(self, now: datetime | None = None) -> bool:
         if not self.schedule:
             return self.trading
-        now = (now or datetime.now(UTC)).astimezone(ZoneInfo(self.schedule_tz))
-        sec = ((now.weekday() + 1) % 7) * 86400 + now.hour * 3600 + now.minute * 60 + now.second  # domingo = 0
+        sec = self._week_second(now)
         return self.trading and any(start <= sec < end for start, end in self.schedule)
+
+    def minutes_to_close(self, now: datetime | None = None) -> float | None:
+        """Minutos até o fim da sessão atual. None quando o mercado é 24x7 ou está fechado."""
+        if not self.schedule:
+            return None
+        sec = self._week_second(now)
+        for start, end in self.schedule:
+            if start <= sec < end:
+                return (end - sec) / 60
+        return None
 
     def floor_qty(self, qty: Decimal) -> Decimal:
         if self.step_size <= 0:

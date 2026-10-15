@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.api.deps import ACCESS_COOKIE, CSRF_COOKIE, CSRF_HEADER
-from app.api.routes import admin, auth, backtest, billing, bots, credentials, ctrader, reports
+from app.api.routes import admin, auth, backtest, billing, bots, credentials, ctrader, mt5, reports
 from app.core.config import get_settings
 from app.core.redis import get_redis
 from app.db import SessionLocal, create_all
@@ -76,7 +76,7 @@ async def csrf_and_headers(request: Request, call_next):
     return response
 
 
-for r in (auth.router, auth.me_router, billing.router, credentials.router, ctrader.router, bots.router, backtest.router, reports.router, admin.router):
+for r in (auth.router, auth.me_router, billing.router, credentials.router, ctrader.router, mt5.router, bots.router, backtest.router, reports.router, admin.router):
     app.include_router(r, prefix=API)
 
 

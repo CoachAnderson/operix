@@ -16,7 +16,9 @@ from app.engine.backtest import BacktestConfig, run_backtest
 from app.models import Bot, ExchangeCredential, Market
 from app.services.brokers.base import BrokerError, Candle
 from app.services.brokers.binance import BinanceClient
+from app.services import b3
 from app.services.brokers.factory import ctrader_broker
+from app.services.brokers.mt5 import MT5Broker
 from app.strategies.library import get_strategy
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
@@ -31,10 +33,10 @@ class BacktestIn(BaseModel):
     strategy: str
     params: dict[str, Any] = Field(default_factory=dict)
     market: Market = Market.crypto
-    credential_id: uuid.UUID | None = None  # forex: conta cTrader do cliente (fonte do histórico)
+    credential_id: uuid.UUID | None = None  # forex: conta cTrader · B3: conexão MetaTrader 5 (fonte do histórico)
     order_lots: float | None = Field(None, gt=0, le=100)
     allow_short: bool = False
-    symbol: str = Field(pattern=r"^[A-Z0-9]{5,20}$")
+    symbol: str = Field(pattern=r"^[A-Z0-9]{3,20}$")
     start: date
     end: date
     initial_balance: float = Field(1000, gt=0, le=10_000_000)
@@ -51,12 +53,22 @@ class BacktestIn(BaseModel):
         today = datetime.now(UTC).date()
         if self.end <= self.start:
             raise ValueError("A data final precisa ser depois da inicial")
-        if self.start < BINANCE_FIRST_DAY:
+        if self.start < BINANCE_FIRST_DAY and self.market == Market.crypto:
             raise ValueError("A Binance tem histórico a partir de 17/08/2017")
         if self.end > today:
             self.end = today
         if self.market == Market.forex and not (self.credential_id and self.order_lots):
             raise ValueError("Para forex informe a conta cTrader e o tamanho em lotes")
+        if self.market == Market.b3:
+            if not (self.credential_id and self.order_lots):
+                raise ValueError("Para a B3 informe a conexão do MetaTrader 5 e o número de contratos")
+            b3.info(self.symbol)
+            # Custos padrão da B3, a não ser que o usuário tenha informado outros.
+            f = b3.FUTURES[self.symbol.upper()]
+            if "fee_rate" not in self.model_fields_set:
+                self.fee_rate = f.fee_rate
+            if "slippage_bps" not in self.model_fields_set:
+                self.slippage_bps = f.slippage_bps
         if self.market == Market.crypto and self.allow_short:
             raise ValueError("Cripto à vista não opera vendido")
         return self
@@ -124,11 +136,20 @@ async def execute(body: BacktestIn, db=None, user=None) -> dict:
             units = float(Decimal(str(body.order_lots)) * (await source.get_rules(body.symbol)).lot_size)
         except BrokerError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"cTrader: {exc}") from exc
+    if body.market == Market.b3:
+        cred = await db.get(ExchangeCredential, body.credential_id) if db else None
+        if not cred or cred.user_id != user.id or cred.exchange != "mt5":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Conexão do MetaTrader 5 não encontrada")
+        source = MT5Broker(cred.id, cred.venue.value)
+        try:
+            units = float(Decimal(str(body.order_lots)) * (await source.get_rules(body.symbol)).lot_size)
+        except BrokerError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     try:
         # Busca candles extras antes do início para "aquecer" os indicadores.
         candles = await load_candles(body.symbol, params.timeframe, start_ms - warmup * step, end_ms, source)
     except BrokerError as exc:
-        origin = "do cTrader" if source else "da Binance"
+        origin = {Market.forex: "do cTrader", Market.b3: "do MetaTrader 5"}.get(body.market, "da Binance")
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Não foi possível baixar o histórico {origin}: {exc}") from exc
 
     cfg = BacktestConfig(

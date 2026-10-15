@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.models import BotStatus, ExecMode, Market, OrderStatus, PosSide, Role, Side, SignalStatus, SubStatus, UserStatus, Venue
+from app.services import b3
 
 
 class ORM(BaseModel):
@@ -166,7 +167,7 @@ class CredentialOut(ORM):
 class BotIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     market: Market = Market.crypto
-    symbol: str = Field(pattern=r"^[A-Z0-9]{5,20}$")
+    symbol: str = Field(pattern=r"^[A-Z0-9]{3,20}$")
     strategy: str
     allow_short: bool = False
     params: dict[str, Any] = Field(default_factory=dict)
@@ -191,7 +192,11 @@ class BotIn(BaseModel):
             self.order_lots = None
         else:
             if not self.order_lots:
-                raise ValueError("Informe o tamanho em lotes (ex.: 0.01)")
+                raise ValueError("Informe o número de contratos" if self.market == Market.b3 else "Informe o tamanho em lotes (ex.: 0.01)")
+            if self.market == Market.b3:
+                b3.info(self.symbol)  # ValueError se o ativo não for liberado
+                if self.order_lots != self.order_lots.to_integral_value():
+                    raise ValueError("Na B3 o tamanho é em contratos inteiros (1, 2, 3…)")
             self.order_size_quote = None
         return self
 
