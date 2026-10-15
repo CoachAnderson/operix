@@ -69,6 +69,7 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
           { href: "/painel/sinais", label: "Sinais", count: pending },
           { href: "/painel/backtest", label: "Backtest" },
           { href: "/painel/ordens", label: "Ordens" },
+          { href: "/painel/relatorios", label: "Relatórios" },
           { href: "/painel/corretora", label: "Corretora" },
           { href: "/painel/assinatura", label: "Assinatura" },
           { href: "/painel/seguranca", label: "Segurança" },
@@ -105,6 +106,11 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
             ))}
           </nav>
           <div className="sidebar-foot">
+            {area === "painel" && (
+              <Link href="/aprender" className="learn-side-link">
+                Aprender: aulas de 5 min
+              </Link>
+            )}
             <span>{user.name}</span>
             {user.role === "admin" && (
               <Link href={area === "admin" ? "/painel" : "/admin"}>{area === "admin" ? "Ir para meu painel" : "Painel admin"}</Link>

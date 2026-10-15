@@ -10,6 +10,8 @@ Arquitetura, modelo de dados e decisões de segurança: [`docs/ARQUITETURA.md`](
 - **Forex (cTrader)**: opera comprado e vendido, tamanho em lotes, stop e alvo enviados à corretora junto com a ordem, horário de mercado respeitado e fechamentos feitos pela corretora (stop, alvo, stop-out) reconciliados automaticamente.
 - **Risco**: stop loss, alvo, tempo máximo posicionado, perda máxima diária (pausa o robô), limite de ordens por dia, botão de encerrar posição e parada geral (kill switch) do admin.
 - **Backtest**: testa qualquer estratégia (ou a configuração de um robô) no histórico da Binance, sem olhar o futuro, com taxa e slippage. Mostra taxa de acerto, resultado médio por operação, ganho médio ÷ perda média, fator de lucro, queda máxima, comparação com comprar e segurar, resultado mês a mês e as operações no gráfico de candles.
+- **Aprender** (`/aprender`, aberto ao público): trilha de 17 aulas de 3 a 5 minutos em 4 módulos (primeiros passos, gráficos, estratégias, risco e robôs), com 14 gráficos interativos (dados fictícios), quiz em cada aula, progresso salvo no navegador e glossário com busca. Conteúdo em `frontend/lib/learn/lessons.ts`; para criar uma aula, basta acrescentar um item lá.
+- **Relatórios em PDF**: o assinante escolhe as moedas (as que têm posição aberta já vêm marcadas), o período e os ambientes, e baixa um PDF com resultado por ambiente, resumo por moeda, posições abertas e todas as ordens. Horário de Brasília; simulação nunca soma com conta real.
 - **Gráficos TradingView**: gráfico avançado do TradingView na tela de cada robô e gráfico de candles (TradingView Lightweight Charts) com compras e vendas marcadas no backtest.
 - **Admin**: receita recorrente, usuários (suspender, conceder plano de cortesia), assinaturas, planos, robôs, parada geral, auditoria e reprocessamento de webhooks.
 - **Segurança**: Argon2id, JWT em cookie httpOnly com CSRF, AES-256-GCM com rotação de chave, recusa de chave com saque, rate limit, cabeçalhos de segurança, auditoria, webhook com HMAC e idempotência de ordens.
@@ -51,7 +53,7 @@ npm run dev                              # http://localhost:3000
 ## Testes
 
 ```bash
-cd backend && pytest        # 39 testes: segurança, webhook, Binance, cTrader (servidor simulado), estratégias, motor, backtest e API
+cd backend && pytest        # 41 testes: segurança, webhook, Binance, cTrader (servidor simulado), estratégias, motor, backtest, relatórios e API
 cd frontend && npm run build
 ```
 
@@ -106,7 +108,7 @@ O nome **OráculoInvest** fica em um lugar só: `BRAND_NAME` no `.env` (usado no
 ```
 backend/
   app/
-    api/routes/        auth, billing (MP), credentials, ctrader, bots e sinais, backtest, admin
+    api/routes/        auth, billing (MP), credentials, ctrader, bots e sinais, backtest, reports (PDF), admin
     core/              config, segurança, criptografia, Redis, rate limit
     engine/            worker, ciclo do robô, executor de ordens, risco, permissões
     services/brokers/  Binance (REST oficial), cTrader (Open API JSON), simulação, fábrica

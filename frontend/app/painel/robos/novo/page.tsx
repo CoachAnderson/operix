@@ -9,6 +9,7 @@ import { api } from "@/lib/api";
 import { VENUE_HINT, venueLabel } from "@/lib/format";
 import type { Bot, Credential, ExecMode, Market, StrategyInfo, Subscription, Venue } from "@/lib/types";
 import { BinanceSignup } from "@/components/BinanceSignup";
+import { STRATEGY_LESSON } from "@/lib/learn/lessons";
 
 const DEFAULT_SYMBOL: Record<Market, string> = { crypto: "BTCUSDT", forex: "EURUSD" };
 
@@ -142,6 +143,13 @@ export default function NewBotPage() {
               </div>
             </div>
           ))}
+          {selected && STRATEGY_LESSON[selected.code] && (
+            <p className="small">
+              <a href={`/aprender/${STRATEGY_LESSON[selected.code]}`} target="_blank" rel="noopener">
+                Entenda como funciona &quot;{selected.name}&quot;: aula de 5 minutos, com gráfico para testar ↗
+              </a>
+            </p>
+          )}
         </fieldset>
 
         {selected && (

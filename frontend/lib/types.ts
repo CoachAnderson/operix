@@ -121,3 +121,11 @@ export interface StrategyInfo {
     properties: Record<string, { type?: string; default?: unknown; minimum?: number; maximum?: number; title?: string; description?: string; enum?: string[]; anyOf?: unknown[] }>;
   };
 }
+
+export interface ReportSymbol {
+  symbol: string;
+  market: Market;
+  open: boolean;
+  open_sides: ("long" | "short")[];
+  bots: number;
+}

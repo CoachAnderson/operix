@@ -20,6 +20,7 @@ export default function Home() {
       <header className="landing-top">
         <span className="brand"><Logo height={34} /></span>
         <div className="actions">
+          <Link className="btn btn-quiet" href="/aprender">Aprender</Link>
           <Link className="btn btn-quiet" href="/entrar">Entrar</Link>
           <Link className="btn btn-primary" href="/cadastro">Criar conta</Link>
         </div>

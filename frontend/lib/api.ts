@@ -58,3 +58,23 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   if (!res.ok) throw new ApiError(res.status, messageFrom(data, res.status), data);
   return data as T;
 }
+
+/** Baixa um arquivo da API (ex.: PDF) com a sessão do usuário e dispara o download no navegador. */
+export async function download(path: string, fallbackName: string, retry = true): Promise<void> {
+  const res = await fetch(`/api/v1${path}`, { credentials: "include" });
+  if (res.status === 401 && retry && (await refreshSession())) return download(path, fallbackName, false);
+  if (!res.ok) {
+    const data = await res.json().catch(() => null);
+    throw new ApiError(res.status, messageFrom(data, res.status), data);
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
