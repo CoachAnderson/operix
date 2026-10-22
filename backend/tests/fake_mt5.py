@@ -19,7 +19,7 @@ SymbolInfo = namedtuple(
     "trade_mode trade_exemode filling_mode currency_profit",
 )
 Tick = namedtuple("Tick", "time bid ask last")
-Account = namedtuple("Account", "login server company name currency trade_mode trade_allowed trade_expert margin_mode")
+Account = namedtuple("Account", "login server company name currency trade_mode trade_allowed trade_expert margin_mode balance equity margin_free leverage")
 Terminal = namedtuple("Terminal", "trade_allowed connected build")
 Result = namedtuple("Result", "retcode deal order volume price comment")
 Position = namedtuple("Position", "ticket symbol type volume price_open magic sl tp")
@@ -44,7 +44,7 @@ class FakeMT5:
     def __init__(self, clock=time.time, offset: int = -10800, trade_mode: int = 0, login: int = 5550123):
         self.clock = clock
         self.offset = offset
-        self.account = Account(login, "Corretora-DEMO", "Corretora Exemplo S.A.", "Cliente Teste", "BRL", trade_mode, True, True, 0)
+        self.account = Account(login, "Corretora-DEMO", "Corretora Exemplo S.A.", "Cliente Teste", "BRL", trade_mode, True, True, 0, 5000.0, 5000.0, 4800.0, 1)
         self.terminal = Terminal(True, True, 4755)
         now = self.server_now()
         day = 86400

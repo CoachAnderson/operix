@@ -55,9 +55,14 @@ def exit_reason(bot: Bot, position: Position, price: Decimal, max_hold_minutes: 
     # Variação a favor da posição: alta para comprado, queda para vendido.
     sign = -1 if position.side == PosSide.short else 1
     change_pct = sign * (price - position.avg_price) / position.avg_price * 100
-    if bot.stop_loss_pct and change_pct <= -bot.stop_loss_pct:
+    # Stop/alvo pelo ATR (preço guardado na entrada) têm prioridade sobre os percentuais.
+    if position.stop_price is not None and sign * (price - position.stop_price) <= 0:
+        return f"Stop pelo ATR: {change_pct:.2f}%"
+    if position.stop_price is None and bot.stop_loss_pct and change_pct <= -bot.stop_loss_pct:
         return f"Stop loss: {change_pct:.2f}%"
-    if bot.take_profit_pct and change_pct >= bot.take_profit_pct:
+    if position.take_price is not None and sign * (price - position.take_price) >= 0:
+        return f"Alvo pelo ATR: {change_pct:.2f}%"
+    if position.take_price is None and bot.take_profit_pct and change_pct >= bot.take_profit_pct:
         return f"Take profit: {change_pct:.2f}%"
     if max_hold_minutes:
         now = now or datetime.now(UTC)

@@ -179,6 +179,14 @@ class BinanceClient:
     async def account(self) -> dict[str, Any]:
         return await self._signed("GET", "/api/v3/account", {"omitZeroBalances": "true"})
 
+    async def account_balance(self, symbol: str) -> Decimal:
+        """Saldo livre na moeda de cotação do par (ex.: USDT em BTCUSDT)."""
+        rules = await self.get_rules(symbol)
+        for b in (await self.account()).get("balances", []):
+            if b.get("asset") == rules.quote_asset:
+                return Decimal(b.get("free", "0"))
+        return Decimal("0")
+
     async def api_restrictions(self) -> dict[str, Any] | None:
         """Permissões da chave (só existe na produção). Usado para recusar chaves com saque habilitado."""
         if self.venue != "live":

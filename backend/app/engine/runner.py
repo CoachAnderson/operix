@@ -1,6 +1,7 @@
 """Um ciclo (tick) de um robô: permissões → reconciliação → saídas de risco → estratégia → execução ou sinal."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from app.engine.guards import Problem, permission_problem
 from app.engine.risk import daily_stats, entry_block_reason, exit_reason, kill_switch_state
 from app.models import Bot, BotStatus, ExecMode, Market, Side, Signal, SignalStatus, User
 from app.services import b3
+from app.strategies import filters as flt
 from app.services.audit import audit
 from app.services.brokers.base import Broker, BrokerError
 from app.services.brokers.factory import broker_for_bot
@@ -34,7 +36,16 @@ class TickResult:
     detail: str = ""
 
 
-async def _emit_signal(db: AsyncSession, bot: Bot, side: Side, price: Decimal, reason: str, now: datetime) -> TickResult:
+def trade_finished(opened_at: datetime, last_closed_open_ms: int, timeframe: str, bars: int) -> bool:
+    """Operação de duração fixa: True quando o último candle fechado é o N-ésimo desde o candle da entrada."""
+    step = flt.TF_MS[timeframe]
+    opened = opened_at if opened_at.tzinfo else opened_at.replace(tzinfo=UTC)
+    entry_candle = int(opened.timestamp() * 1000) // step * step
+    return last_closed_open_ms >= entry_candle + (bars - 1) * step
+
+
+async def _emit_signal(db: AsyncSession, bot: Bot, side: Side, price: Decimal, reason: str, now: datetime,
+                       expires_at: datetime | None = None) -> TickResult:
     existing = await db.scalar(
         select(Signal.id).where(Signal.bot_id == bot.id, Signal.status == SignalStatus.pending, Signal.side == side)
     )
@@ -48,16 +59,17 @@ async def _emit_signal(db: AsyncSession, bot: Bot, side: Side, price: Decimal, r
             side=side,
             ref_price=price,
             reason=reason[:255],
-            expires_at=now + timedelta(minutes=get_settings().signal_ttl_minutes),
+            expires_at=expires_at or now + timedelta(minutes=get_settings().signal_ttl_minutes),
         )
     )
     await db.commit()
     return TickResult("signal", f"{side.value}: {reason}")
 
 
-async def _act(db: AsyncSession, bot: Bot, broker: Broker, side: Side, price: Decimal, reason: str, now: datetime) -> TickResult:
+async def _act(db: AsyncSession, bot: Bot, broker: Broker, side: Side, price: Decimal, reason: str, now: datetime,
+               expires_at: datetime | None = None) -> TickResult:
     if bot.exec_mode == ExecMode.signals:
-        return await _emit_signal(db, bot, side, price, reason, now)
+        return await _emit_signal(db, bot, side, price, reason, now, expires_at)
     try:
         order = await executor.execute(db, bot, broker, side, reason)
     except executor.ExecutionBlocked as exc:
@@ -92,6 +104,7 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
 
     strategy = get_strategy(bot.strategy)
     params = strategy.parse_params(bot.params)
+    filters = flt.parse(bot.filters)
 
     broker = await factory(db, bot)
     try:
@@ -99,13 +112,14 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
         await executor.reconcile_unknown(db, bot, broker, now)
         await executor.sync_broker_closes(db, bot, broker)
 
-        candles = strategy.closed_only(
-            await broker.get_klines(bot.symbol, params.timeframe, strategy.required_candles(params) + 2),
-            int(now.timestamp() * 1000),
+        # Candles e preço ao mesmo tempo: menos espera entre o fechamento do candle e a ordem.
+        raw, price = await asyncio.gather(
+            broker.get_klines(bot.symbol, params.timeframe, max(strategy.required_candles(params), filters.lookback()) + 2),
+            broker.get_price(bot.symbol),
         )
+        candles = strategy.closed_only(raw, int(now.timestamp() * 1000))
         if len(candles) < 3:
             return TickResult("hold", "Sem candles suficientes")
-        price = await broker.get_price(bot.symbol)
         position = await executor.get_position(db, bot.id)
         bot.last_tick_at = now
 
@@ -141,24 +155,60 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
         if await r.get(seen_key) == last_open:
             await db.commit()
             return TickResult("hold", "Candle já avaliado")
-        current = position.side.value if position else "flat"
+        # Duração fixa (ex.: Reversão AMS, 1 candle): a operação termina no fechamento do seu último candle,
+        # mesmo que o próximo sinal seja na mesma direção (aí fecha e abre de novo, como no backtest).
+        bars = strategy.trade_bars
+        finished = bool(position and bars and trade_finished(position.opened_at, candles[-1].open_time, params.timeframe, bars))
+        current = "flat" if finished else (position.side.value if position else "flat")
         decision = strategy.decide(candles, current, params, bot.allow_short and broker.supports_short)
         await r.set(seen_key, last_open, ex=7 * 86400)
 
         target = decision.target
-        if target is None or target == current:
+        if finished and target is None:
+            target = "flat"
+        entry_note = decision.reason
+        signal_expiry: datetime | None = None
+        if bars and target in ("long", "short"):
+            # Entrada só vale perto da abertura do candle; atrasada, a operação não teria a duração da regra.
+            candle_open_ms = candles[-1].close_time + 1
+            delay = (now.timestamp() * 1000 - candle_open_ms) / 1000
+            if delay > strategy.max_entry_delay_s:
+                entry_note = f"Entrada descartada: {delay:.0f}s de atraso desde a abertura do candle ({decision.reason})"
+                target = "flat"
+            signal_expiry = datetime.fromtimestamp((candle_open_ms + flt.TF_MS[params.timeframe] * bars) / 1000, UTC)
+        if not finished and (target is None or target == current):
             await db.commit()
-            return TickResult("hold", decision.reason)
+            return TickResult("hold", entry_note)
 
         # Primeiro encerra a posição atual (se houver); a nova entrada acontece no mesmo ciclo
         # no modo automático, ou vira o próximo sinal no modo sinais.
+        closed: TickResult | None = None
         if position:
-            result = await _act(db, bot, broker, executor.closing_side(position.side), price, decision.reason, now)
-            if target == "flat" or bot.exec_mode == ExecMode.signals or result.action != "executed":
+            close_reason = f"Fim da operação de {bars} candle(s) de {params.timeframe}" if finished else decision.reason
+            result = await _act(db, bot, broker, executor.closing_side(position.side), price, close_reason, now)
+            if finished and target == "flat" and entry_note != decision.reason:
+                result = TickResult(result.action, f"{result.detail} · {entry_note}")
+            if bot.exec_mode == ExecMode.signals and finished and target != "flat" and result.action == "signal":
+                closed = result  # sinal de saída emitido; o sinal da nova operação vem em seguida
+            elif target == "flat" or bot.exec_mode == ExecMode.signals or result.action != "executed":
                 return result
-            await db.refresh(bot)
-            if await executor.get_position(db, bot.id):
-                return result  # fechamento ainda não confirmado
+            else:
+                await db.refresh(bot)
+                if await executor.get_position(db, bot.id):
+                    return result  # fechamento ainda não confirmado
+                closed = result
+
+        # Filtros de entrada: barram só a abertura de posição, nunca a saída.
+        if filters.any_entry_filter:
+            htf = None
+            if filters.htf:
+                htf = strategy.closed_only(await broker.get_klines(bot.symbol, filters.htf, filters.htf_lookback() + 2), int(now.timestamp() * 1000))
+            family = flt.STRATEGY_FAMILY.get(bot.strategy, "trend")
+            why = flt.entry_block(filters, family, target, candles, htf, int(now.timestamp() * 1000))  # type: ignore[arg-type]
+            if why:
+                await db.commit()
+                note = f"Entrada filtrada: {why}"
+                return TickResult(closed.action, f"{closed.detail} · {note}") if closed else TickResult("hold", note)
 
         stats = await daily_stats(db, bot.id, now)
         block, pause = entry_block_reason(bot, stats)
@@ -170,7 +220,39 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
             await db.commit()
             return TickResult("blocked", block)
         side = Side.buy if target == "long" else Side.sell
-        return await _act(db, bot, broker, side, price, decision.reason, now)
+        if closed:
+            entry = await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry)
+            return TickResult(entry.action, f"{closed.detail} · {entry.detail}")
+        return await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry)
+    finally:
+        await broker.close()
+
+
+async def run_risk_tick(
+    db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_for_bot, price: Decimal | None = None, now: datetime | None = None
+) -> TickResult:
+    """Conferência rápida de uma posição aberta: stop, alvo e tempo máximo, sem baixar candles.
+
+    Chamada pelo agendador quando o preço em tempo real cruza um nível, ou a cada poucos segundos.
+    Saídas não dependem de assinatura nem de filtros: proteger a posição vem sempre primeiro.
+    """
+    now = now or datetime.now(UTC)
+    position = await executor.get_position(db, bot.id)
+    if not position:
+        return TickResult("skipped", "Sem posição aberta")
+    strategy = get_strategy(bot.strategy)
+    params = strategy.parse_params(bot.params)
+    broker = await factory(db, bot)
+    try:
+        if position.external_id:  # stop/alvo guardados na corretora (cTrader, MT5)
+            if await executor.sync_broker_closes(db, bot, broker):
+                return TickResult("executed", "Encerrada pela corretora")
+        if price is None:
+            price = await broker.get_price(bot.symbol)
+        reason = exit_reason(bot, position, price, strategy.max_hold_minutes(params), now)
+        if not reason:
+            return TickResult("hold")
+        return await _act(db, bot, broker, executor.closing_side(position.side), price, reason, now)
     finally:
         await broker.close()
 

@@ -9,10 +9,11 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from app.api.deps import DB, ActivePlan, CurrentUser, active_subscription
-from app.core.ratelimit import client_ip
+from app.core.ratelimit import client_ip, hit
 from app.engine import executor
 from app.engine.guards import permission_problem
 from app.engine.risk import daily_stats
+from app.engine.sizing import SizingBlocked
 from app.models import (
     Bot,
     BotStatus,
@@ -20,6 +21,7 @@ from app.models import (
     ExecMode,
     Market,
     Order,
+    PosSide,
     OrderStatus,
     Side,
     Signal,
@@ -30,6 +32,7 @@ from app.schemas import BotIn, BotOut, BotSummary, BotUpdate, OrderOut, Position
 from app.services.audit import audit
 from app.services.brokers.base import BrokerError
 from app.services.brokers.factory import broker_for_bot
+from app.strategies.filters import STRATEGY_FAMILY, BotFilters
 from app.strategies.library import STRATEGIES, get_strategy
 
 router = APIRouter(tags=["robôs"])
@@ -79,6 +82,14 @@ async def _check_credential(db, user, credential_id: uuid.UUID | None, venue: Ve
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "A credencial é de outro ambiente (demo/testnet × real)")
 
 
+def _check_filters(filters: BotFilters, strategy_code: str, params: dict) -> dict:
+    try:
+        filters.validate_for(get_strategy(strategy_code).parse_params(params).timeframe)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Filtros: {exc}") from exc
+    return filters.model_dump(exclude_defaults=True)
+
+
 def _check_plan(plan, exec_mode: ExecMode, venue: Venue) -> None:
     if exec_mode == ExecMode.auto and not plan.allow_auto:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"O plano {plan.name} não inclui execução automática")
@@ -104,7 +115,11 @@ async def list_strategies() -> list[StrategyInfo]:
             style=s.style,
             description=s.description,
             timeframe=s.Params.model_fields["timeframe"].default,
+            family=STRATEGY_FAMILY.get(s.code, "trend"),
             params_schema=s.Params.model_json_schema(),
+            trade_bars=s.trade_bars,
+            suggested_max_trades_per_day=s.suggested_max_trades_per_day,
+            notes=list(s.notes),
         )
         for s in STRATEGIES.values()
     ]
@@ -124,6 +139,7 @@ async def create_bot(body: BotIn, user: CurrentUser, plan: ActivePlan, request: 
     _check_plan(plan, body.exec_mode, body.venue)
     await _check_credential(db, user, body.credential_id, body.venue, body.market)
     params = _validate_params(body.strategy, body.params)
+    filters = _check_filters(body.filters, body.strategy, params)
 
     bot = Bot(
         user_id=user.id,
@@ -133,11 +149,15 @@ async def create_bot(body: BotIn, user: CurrentUser, plan: ActivePlan, request: 
         strategy=body.strategy,
         allow_short=body.allow_short,
         params=params,
+        filters=filters,
         exec_mode=body.exec_mode,
         venue=body.venue,
         credential_id=body.credential_id if (body.venue != Venue.paper or body.market != Market.crypto) else None,
         order_size_quote=body.order_size_quote,
         order_lots=body.order_lots,
+        sizing_mode=body.sizing_mode,
+        risk_pct=body.risk_pct,
+        max_leverage=body.max_leverage,
         stop_loss_pct=body.stop_loss_pct,
         take_profit_pct=body.take_profit_pct,
         max_daily_loss_quote=body.max_daily_loss_quote,
@@ -185,6 +205,8 @@ async def update_bot(bot_id: uuid.UUID, body: BotUpdate, user: CurrentUser, plan
 
     if "params" in data:
         data["params"] = _validate_params(bot.strategy, data["params"])
+    if "filters" in data:
+        data["filters"] = _check_filters(body.filters or BotFilters(), bot.strategy, data.get("params", bot.params))
     if venue == Venue.paper and bot.market == Market.crypto:
         data["credential_id"] = None
     if bot.market == Market.b3 and data.get("order_lots") is not None and data["order_lots"] != data["order_lots"].to_integral_value():
@@ -199,6 +221,15 @@ async def update_bot(bot_id: uuid.UUID, body: BotUpdate, user: CurrentUser, plan
         raise HTTPException(status.HTTP_409_CONFLICT, "Encerre a posição antes de mudar a direção do robô")
     for key, value in data.items():
         setattr(bot, key, value)
+    if bot.sizing_mode == "risk":
+        if not bot.risk_pct:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Informe quanto do saldo arriscar por operação (ex.: 1%)")
+        if not (bot.stop_loss_pct or (bot.filters or {}).get("stop_atr")):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "O tamanho pelo risco precisa de um stop (em % ou pelo ATR)")
+    elif bot.market == Market.crypto and not bot.order_size_quote:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Informe o valor por ordem")
+    elif bot.market != Market.crypto and not bot.order_lots:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Informe o tamanho em lotes ou contratos")
     await audit(db, "bot.updated", user.id, target=str(bot.id), ip=client_ip(request), fields=sorted(data.keys()))
     await db.commit()
     return bot
@@ -279,6 +310,58 @@ async def list_orders(
     if bot_id:
         q = q.where(Order.bot_id == bot_id)
     return list(await db.scalars(q.order_by(Order.created_at.desc()).limit(limit)))
+
+
+# ---------------- Prévia do tamanho e da alavancagem ----------------
+class SizingPreviewIn(BotIn):
+    name: str = "Prévia"
+
+
+async def _preview(db, bot: Bot) -> dict:
+    """Calcula o tamanho da próxima entrada com o saldo e o preço de agora, sem enviar nada."""
+    try:
+        broker = await broker_for_bot(db, bot)
+    except BrokerError as exc:
+        return {"ok": False, "message": str(exc)}
+    try:
+        rules = await broker.get_rules(bot.symbol)
+        plan, *_ = await executor.plan_entry(bot, broker, rules, PosSide.long, always_balance=True)
+    except SizingBlocked as exc:
+        return {"ok": False, "message": str(exc)}
+    except (BrokerError, ValueError) as exc:
+        return {"ok": False, "message": f"Não foi possível consultar a corretora: {exc}"}
+    finally:
+        await broker.close()
+    unit = {Market.b3: "contratos", Market.forex: "lotes"}.get(bot.market)
+    return {
+        "ok": True,
+        "currency": rules.currency or rules.quote_asset,
+        "unit": unit,
+        **plan.as_dict(),
+    }
+
+
+@router.post("/bots/sizing-preview")
+async def sizing_preview(body: SizingPreviewIn, user: CurrentUser, db: DB) -> dict:
+    await hit(f"preview:{user.id}", 60, 60)
+    await _check_credential(db, user, body.credential_id, body.venue, body.market)
+    params = _validate_params(body.strategy, body.params)
+    filters = _check_filters(body.filters, body.strategy, params)
+    bot = Bot(  # objeto temporário: não é salvo
+        user_id=user.id, name=body.name, market=body.market, symbol=body.symbol, strategy=body.strategy, params=params, filters=filters,
+        allow_short=body.allow_short, exec_mode=body.exec_mode, venue=body.venue,
+        credential_id=body.credential_id if (body.venue != Venue.paper or body.market != Market.crypto) else None,
+        order_size_quote=body.order_size_quote, order_lots=body.order_lots, sizing_mode=body.sizing_mode, risk_pct=body.risk_pct,
+        max_leverage=body.max_leverage, stop_loss_pct=body.stop_loss_pct, take_profit_pct=body.take_profit_pct,
+        paper_quote_balance=body.paper_quote_balance, paper_base_balance=Decimal("0"),
+    )
+    return await _preview(db, bot)
+
+
+@router.get("/bots/{bot_id}/sizing-preview")
+async def bot_sizing_preview(bot_id: uuid.UUID, user: CurrentUser, db: DB) -> dict:
+    await hit(f"preview:{user.id}", 60, 60)
+    return await _preview(db, await _get_bot(db, user, bot_id))
 
 
 # ---------------- Sinais ----------------

@@ -6,6 +6,7 @@ Uma ordem de COMPRA ou VENDA é interpretada contra a posição atual do robô:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,10 @@ from app.models import Bot, Market, Order, OrderStatus, Position, PosSide, Side,
 from app.services.audit import audit
 from app.services.brokers.base import Broker, BrokerError, Fill, OrderUnknownError
 from app.services.brokers.paper import PaperBroker
+from app.engine import sizing
+from app.strategies import filters as flt
+from app.strategies.base import Strategy
+from app.strategies.library import get_strategy
 
 log = logging.getLogger(__name__)
 
@@ -134,15 +139,59 @@ async def apply_fill(db: AsyncSession, bot: Bot, order: Order, fill: Fill, broke
     _sync_paper(bot, broker)
 
 
-async def _protection(bot: Bot, broker: Broker, side: PosSide) -> tuple[Decimal | None, Decimal | None]:
-    """Stop e alvo em preço absoluto, para corretoras que guardam a proteção no servidor."""
-    if not (bot.stop_loss_pct or bot.take_profit_pct):
-        return None, None
+async def _protection(bot: Bot, broker: Broker, side: PosSide) -> tuple[Decimal | None, Decimal | None, float | None, Decimal | None]:
+    """Stop e alvo em preço absoluto (para corretoras que guardam a proteção no servidor).
+
+    Com stop/alvo pelo ATR, mede o ATR nos candles fechados do tempo gráfico da estratégia; as pernas sem
+    ATR continuam pelos percentuais do robô. Devolve também o ATR usado (None no modo percentual).
+    """
+    f = flt.parse(bot.filters)
+    atr_now: float | None = None
+    sl_atr = tp_atr = None
+    if f.atr_exits:
+        timeframe = get_strategy(bot.strategy).parse_params(bot.params).timeframe
+        candles = Strategy.closed_only(await broker.get_klines(bot.symbol, timeframe, f.lookback() + 2))
+        atr_now = flt.atr_value(candles, f.atr_period)
+        if atr_now != atr_now or atr_now <= 0:  # NaN: histórico curto; cai para os percentuais
+            atr_now = None
+    if not (bot.stop_loss_pct or bot.take_profit_pct or atr_now):
+        return None, None, None, None
     ref = await broker.get_price(bot.symbol)
     sign = 1 if side == PosSide.long else -1
-    sl = ref * (1 - sign * bot.stop_loss_pct / 100) if bot.stop_loss_pct else None
-    tp = ref * (1 + sign * bot.take_profit_pct / 100) if bot.take_profit_pct else None
-    return sl, tp
+    if atr_now:
+        s_, t_ = flt.atr_levels(f, side.value, float(ref), atr_now)  # type: ignore[arg-type]
+        sl_atr = Decimal(str(s_)) if s_ is not None else None
+        tp_atr = Decimal(str(t_)) if t_ is not None else None
+    sl = sl_atr or (ref * (1 - sign * bot.stop_loss_pct / 100) if bot.stop_loss_pct else None)
+    tp = tp_atr or (ref * (1 + sign * bot.take_profit_pct / 100) if bot.take_profit_pct else None)
+    return sl, tp, atr_now, ref
+
+
+async def plan_entry(bot: Bot, broker: Broker, rules, side: PosSide, always_balance: bool = False) -> tuple[sizing.SizePlan, Decimal | None, Decimal | None, float | None]:
+    """Stop/alvo e tamanho da próxima entrada. Usado na execução e na prévia da tela do robô.
+
+    Na execução, o saldo só é consultado quando a regra precisa dele; na prévia, sempre (para mostrar a alavancagem).
+    """
+    getter = getattr(broker, "account_balance", None)
+    required = sizing.needs_balance(bot)
+    if required and getter is None:
+        raise sizing.SizingBlocked("Esta corretora não informa o saldo; use tamanho fixo e sem limite de alavancagem")
+
+    async def read_balance() -> Decimal | None:
+        if getter is None or not (required or always_balance):
+            return None
+        try:
+            return await getter(bot.symbol)
+        except BrokerError:
+            if required:
+                raise
+            return None
+
+    # Proteção (preço, candles do ATR) e saldo em paralelo: menos tempo entre o sinal e a ordem.
+    (sl, tp, atr_now, ref), balance = await asyncio.gather(_protection(bot, broker, side), read_balance())
+    price = ref if ref is not None else await broker.get_price(bot.symbol)
+    plan = sizing.compute(bot, rules, price, sl, balance)
+    return plan, sl, tp, atr_now
 
 
 async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason: str, actor_id: uuid.UUID | None = None) -> Order:
@@ -164,7 +213,16 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             if not rules.is_open():
                 raise ExecutionBlocked(f"Mercado de {bot.symbol} fechado agora")
 
-        units = bot.order_lots * rules.lot_size if (opening and bot.market != Market.crypto and bot.order_lots) else None
+        plan: sizing.SizePlan | None = None
+        sl = tp = None
+        atr_now: float | None = None
+        if opening:
+            # Stop, alvo e tamanho ANTES de registrar a ordem: sem tamanho possível, nada é enviado.
+            try:
+                plan, sl, tp, atr_now = await plan_entry(bot, broker, rules, opening)
+            except sizing.SizingBlocked as exc:
+                raise ExecutionBlocked(str(exc)) from exc
+        note = f" [{plan.note}]" if plan and plan.note else ""
         order = Order(
             bot_id=bot.id,
             user_id=bot.user_id,
@@ -172,23 +230,22 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             client_order_id=new_client_order_id(),
             symbol=bot.symbol,
             side=side,
-            qty=position.qty if position else (units or Decimal("0")),
-            quote_qty=bot.order_size_quote if (opening and bot.market == Market.crypto) else None,
+            qty=position.qty if position else (plan.units or Decimal("0")),  # type: ignore[union-attr]
+            quote_qty=plan.quote_amount if plan else None,
             status=OrderStatus.new,
-            reason=reason[:255],
+            reason=(reason[: 255 - len(note)] + note),
         )
         db.add(order)
         await db.commit()  # registra a intenção ANTES de enviar: nada se perde se o processo cair
 
         try:
             if opening:
-                sl, tp = await _protection(bot, broker, opening)
                 fill = await broker.open_position(
                     bot.symbol,
                     opening,
                     order.client_order_id,
-                    quote_amount=bot.order_size_quote if bot.market == Market.crypto else None,
-                    units=units,
+                    quote_amount=plan.quote_amount,  # type: ignore[union-attr]
+                    units=plan.units,  # type: ignore[union-attr]
                     sl_price=sl,
                     tp_price=tp,
                 )
@@ -208,6 +265,15 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             raise
 
         await apply_fill(db, bot, order, fill, broker)
+        if opening and atr_now and fill.executed_qty > 0:
+            # Guarda stop/alvo pelo ATR a partir do preço REAL de entrada; o motor confere a cada ciclo.
+            await db.flush()
+            pos = await get_position(db, bot.id)
+            if pos is not None:
+                f = flt.parse(bot.filters)
+                s_, t_ = flt.atr_levels(f, opening.value, float(fill.avg_price), atr_now)  # type: ignore[arg-type]
+                pos.stop_price = Decimal(str(round(s_, 10))) if s_ is not None else None
+                pos.take_price = Decimal(str(round(t_, 10))) if t_ is not None else None
         await audit(
             db,
             "order.filled",

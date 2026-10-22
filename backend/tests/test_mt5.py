@@ -197,6 +197,7 @@ async def test_b3_bot_end_to_end(client, db, plans, monkeypatch):
         broker = await broker_for_bot(db, bot)
         rules = await broker.get_rules("WIN")
         assert rules.contract == "WINZ26" and rules.lot_size == Decimal("0.2")
+        assert await broker.account_balance("WIN") == Decimal("5000")  # patrimônio lido pelo conector
 
         # Abre vendido 2 contratos e fecha com 500 pontos a favor
         o1 = await executor.execute(db, bot, broker, Side.sell, "teste: venda")

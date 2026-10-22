@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     binance_live_base: str = "https://api.binance.com"
     binance_testnet_base: str = "https://testnet.binance.vision"
     binance_market_data_base: str = "https://data-api.binance.vision"  # dados públicos
+    binance_ws_live: str = "wss://stream.binance.com:9443/ws"  # preço em tempo real (stop/alvo)
+    binance_ws_testnet: str = "wss://stream.testnet.binance.vision/ws"
 
     # cTrader Open API — app da PLATAFORMA (opcional). Sem isso, cada cliente informa o app próprio.
     ctrader_client_id: str = ""
@@ -48,8 +50,12 @@ class Settings(BaseSettings):
     ctrader_demo_host: str = "demo.ctraderapi.com"
     ctrader_json_port: int = 5036
 
-    # Motor
-    worker_interval_seconds: int = 20
+    # Motor (orientado a eventos: decide ~1 s após cada fechamento de candle; stop/alvo em tempo real)
+    worker_interval_seconds: int = 60  # conferência completa de segurança, além das agendadas no fechamento
+    candle_close_delay_ms: int = 1200  # espera após o fechamento para a corretora publicar o candle
+    risk_poll_seconds: float = 2.0  # stop/alvo sem preço em tempo real (simulação de forex/B3)
+    broker_risk_poll_seconds: float = 5.0  # cTrader/MT5: o stop já está na corretora; só o tempo máximo etc.
+    price_feed: bool = True  # preço em tempo real da Binance por WebSocket
     paper_fee_rate: float = 0.001  # 0,1% (taxa padrão spot)
     paper_slippage_bps: float = 5  # 0,05%
     signal_ttl_minutes: int = 15

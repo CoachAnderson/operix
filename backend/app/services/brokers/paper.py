@@ -47,6 +47,10 @@ class PaperBroker:
     async def get_rules(self, symbol: str) -> SymbolRules:
         return await self._md.get_rules(symbol)
 
+    async def account_balance(self, symbol: str) -> Decimal:
+        """Saldo simulado: dinheiro livre (à vista) ou saldo da conta de margem."""
+        return self.account.quote
+
     def _fill(self, coid: str, side: Side, qty: Decimal, price: Decimal, fee: Decimal, net: Decimal | None = None, pnl: Decimal | None = None) -> Fill:
         return Fill(
             client_order_id=coid,

@@ -66,3 +66,59 @@ def crossed_above(a: list[float], b: list[float]) -> bool:
 
 def crossed_below(a: list[float], b: list[float]) -> bool:
     return len(a) >= 2 and a[-2] >= b[-2] and a[-1] < b[-1]
+
+
+def true_range(highs: list[float], lows: list[float], closes: list[float]) -> list[float]:
+    out = [math.nan] * len(closes)
+    for i in range(1, len(closes)):
+        pc = closes[i - 1]
+        out[i] = max(highs[i] - lows[i], abs(highs[i] - pc), abs(lows[i] - pc))
+    return out
+
+
+def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> list[float]:
+    """ATR de Wilder: tamanho médio do movimento de cada candle, incluindo saltos de abertura."""
+    tr = true_range(highs, lows, closes)
+    out = [math.nan] * len(closes)
+    if len(closes) <= period:
+        return out
+    prev = sum(tr[1 : period + 1]) / period
+    out[period] = prev
+    for i in range(period + 1, len(closes)):
+        prev = (prev * (period - 1) + tr[i]) / period
+        out[i] = prev
+    return out
+
+
+def adx(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> list[float]:
+    """ADX de Wilder (0 a 100): força da tendência, sem dizer a direção. Acima de ~20-25, há tendência."""
+    n = len(closes)
+    out = [math.nan] * n
+    if n < period * 2 + 1:
+        return out
+    tr = true_range(highs, lows, closes)
+    pdm = [0.0] * n
+    mdm = [0.0] * n
+    for i in range(1, n):
+        up, down = highs[i] - highs[i - 1], lows[i - 1] - lows[i]
+        pdm[i] = up if up > down and up > 0 else 0.0
+        mdm[i] = down if down > up and down > 0 else 0.0
+    s_tr = sum(tr[1 : period + 1])
+    s_p = sum(pdm[1 : period + 1])
+    s_m = sum(mdm[1 : period + 1])
+    dx: list[float] = []
+    for i in range(period, n):
+        if i > period:
+            s_tr = s_tr - s_tr / period + tr[i]
+            s_p = s_p - s_p / period + pdm[i]
+            s_m = s_m - s_m / period + mdm[i]
+        if s_tr <= 0:
+            dx.append(0.0)
+            continue
+        pdi, mdi = 100 * s_p / s_tr, 100 * s_m / s_tr
+        dx.append(0.0 if pdi + mdi == 0 else 100 * abs(pdi - mdi) / (pdi + mdi))
+        if len(dx) == period:
+            out[i] = sum(dx) / period
+        elif len(dx) > period:
+            out[i] = (out[i - 1] * (period - 1) + dx[-1]) / period
+    return out

@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import math
 
+from typing import Literal
+
 from pydantic import Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from app.services.brokers.base import Candle
 from app.strategies.base import Decision, Strategy, StrategyParams, Target, Timeframe
@@ -141,7 +144,61 @@ class DonchianBreakout(Strategy):
         return Decision.hold()
 
 
-STRATEGIES: dict[str, Strategy] = {s.code: s() for s in (EmaCrossDay, EmaCrossSwing, RsiReversion, DonchianBreakout)}
+# ---------------------------------------------------------------- Reversão AMS (1 minuto)
+AMS_WINDOW = 5
+
+
+class ReversaoAMS(Strategy):
+    """Conta altas e baixas nos 5 últimos candles FECHADOS de 1 minuto e entra contra a maioria na abertura do
+    6º candle; a operação dura exatamente esse candle (sai no fechamento). Doji (fechamento = abertura) não conta."""
+
+    code = "reversao_ams"
+    name = "Reversão AMS (1 minuto)"
+    style = "day"
+    description = (
+        "Olha os 5 últimos candles fechados de 1 minuto. Com 3, 4 ou 5 de alta, vende; com 3, 4 ou 5 de baixa, compra. "
+        "Entra na abertura do candle seguinte e sai no fechamento dele: cada operação dura 1 minuto."
+    )
+    default_max_hold_minutes = 3  # rede de segurança: a saída normal acontece no fechamento do candle
+    trade_bars = 1
+    suggested_max_trades_per_day = 120
+    notes = (
+        "Cada operação dura exatamente 1 candle de 1 minuto; o robô decide cerca de 1 segundo após cada fechamento.",
+        "Na Binance à vista não há venda a descoberto: o robô só faz as compras (CALL). Os sinais de venda (PUT) só viram operação em forex e B3, com 'operar vendido' ligado.",
+        "Em 1 minuto o preço anda pouco. Taxa e escorregamento de ida e volta podem ser maiores que o movimento médio do candle: confira no backtest o custo médio contra o movimento médio antes de ligar.",
+        "Cada operação conta 2 no limite diário (entrada e saída). O limite sugerido de 120 equivale a 60 operações por dia.",
+    )
+
+    class Params(StrategyParams):
+        timeframe: Literal["1m"] = "1m"
+        min_majority: int = Field(3, ge=3, le=5, description="Candles na mesma direção, entre os 5, para entrar")
+        max_hold_minutes: SkipJsonSchema[int | None] = None  # duração fixa: não se aplica
+
+    def required_candles(self, params) -> int:  # type: ignore[override]
+        return AMS_WINDOW
+
+    def decide(self, candles: list[Candle], position: Target, params, allow_short: bool = False) -> Decision:  # type: ignore[override]
+        if len(candles) < AMS_WINDOW:
+            return Decision("flat", "Histórico insuficiente")
+        last = candles[-AMS_WINDOW:]
+        step = 60_000
+        if last[-1].open_time - last[0].open_time != (AMS_WINDOW - 1) * step:
+            return Decision("flat", "Falta candle de 1 minuto na sequência dos 5 analisados")
+        up = sum(1 for c in last if c.close > c.open)
+        down = sum(1 for c in last if c.close < c.open)
+        seq = " ".join("A" if c.close > c.open else "B" if c.close < c.open else "D" for c in last)
+        if up >= params.min_majority:
+            tag = f"{up}x{AMS_WINDOW - up}"
+            if not allow_short:
+                return Decision("flat", f"Reversão AMS: {up} de 5 em alta ({seq}) pede venda, mas o robô não opera vendido", tag)
+            return Decision("short", f"Reversão AMS {tag}: {up} de 5 candles em alta ({seq}) → venda por 1 candle", tag)
+        if down >= params.min_majority:
+            tag = f"{down}x{AMS_WINDOW - down}"
+            return Decision("long", f"Reversão AMS {tag}: {down} de 5 candles em baixa ({seq}) → compra por 1 candle", tag)
+        return Decision("flat", f"Reversão AMS: sem maioria de {params.min_majority} em 5 ({seq})")
+
+
+STRATEGIES: dict[str, Strategy] = {s.code: s() for s in (EmaCrossDay, EmaCrossSwing, RsiReversion, DonchianBreakout, ReversaoAMS)}
 
 
 def get_strategy(code: str) -> Strategy:

@@ -341,6 +341,11 @@ class CTraderBroker:
         res = await self._req(PT.TRADER_REQ, {})
         return res.get("trader", {})
 
+    async def account_balance(self, symbol: str) -> Decimal:
+        """Saldo da conta (na moeda de depósito da conta)."""
+        t = await self.trader()
+        return money_value(t.get("balance", 0), t.get("moneyDigits", 2))
+
     # ---------------- ordens ----------------
     @staticmethod
     def _volume(rules: SymbolRules, units: Decimal) -> int:

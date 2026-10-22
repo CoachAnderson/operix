@@ -4,12 +4,13 @@ import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from app.models import BotStatus, ExecMode, Market, OrderStatus, PosSide, Role, Side, SignalStatus, SubStatus, UserStatus, Venue
 from app.services import b3
+from app.strategies.filters import BotFilters
 
 
 class ORM(BaseModel):
@@ -179,23 +180,33 @@ class BotIn(BaseModel):
     stop_loss_pct: Decimal | None = Field(default=None, gt=0, le=50)
     take_profit_pct: Decimal | None = Field(default=None, gt=0, le=500)
     max_daily_loss_quote: Decimal | None = Field(default=None, gt=0)
-    max_trades_per_day: int = Field(default=10, ge=1, le=500)
+    max_trades_per_day: int = Field(default=10, ge=1, le=3000)
     paper_quote_balance: Decimal = Field(default=Decimal("1000"), gt=0, le=Decimal("10000000"))
+    filters: BotFilters = Field(default_factory=BotFilters)
+    sizing_mode: Literal["fixed", "risk"] = "fixed"
+    risk_pct: Decimal | None = Field(default=None, gt=0, le=10)
+    max_leverage: Decimal | None = Field(default=None, gt=0, le=500)
 
     @model_validator(mode="after")
     def check_market(self) -> BotIn:
+        fixed = self.sizing_mode == "fixed"
+        if not fixed:
+            if not self.risk_pct:
+                raise ValueError("Informe quanto do saldo arriscar por operação (ex.: 1%)")
+            if not (self.stop_loss_pct or self.filters.stop_atr):
+                raise ValueError("O tamanho pelo risco precisa de um stop (em % ou pelo ATR)")
         if self.market == Market.crypto:
-            if not self.order_size_quote:
+            if fixed and not self.order_size_quote:
                 raise ValueError("Informe o valor por ordem")
             if self.allow_short:
                 raise ValueError("Cripto à vista não opera vendido")
             self.order_lots = None
         else:
-            if not self.order_lots:
+            if fixed and not self.order_lots:
                 raise ValueError("Informe o número de contratos" if self.market == Market.b3 else "Informe o tamanho em lotes (ex.: 0.01)")
             if self.market == Market.b3:
                 b3.info(self.symbol)  # ValueError se o ativo não for liberado
-                if self.order_lots != self.order_lots.to_integral_value():
+                if self.order_lots is not None and self.order_lots != self.order_lots.to_integral_value():
                     raise ValueError("Na B3 o tamanho é em contratos inteiros (1, 2, 3…)")
             self.order_size_quote = None
         return self
@@ -213,7 +224,11 @@ class BotUpdate(BaseModel):
     stop_loss_pct: Decimal | None = Field(default=None, gt=0, le=50)
     take_profit_pct: Decimal | None = Field(default=None, gt=0, le=500)
     max_daily_loss_quote: Decimal | None = Field(default=None, gt=0)
-    max_trades_per_day: int | None = Field(default=None, ge=1, le=500)
+    max_trades_per_day: int | None = Field(default=None, ge=1, le=3000)
+    filters: BotFilters | None = None
+    sizing_mode: Literal["fixed", "risk"] | None = None
+    risk_pct: Decimal | None = Field(default=None, gt=0, le=10)
+    max_leverage: Decimal | None = Field(default=None, gt=0, le=500)
 
 
 class BotOut(ORM):
@@ -237,6 +252,10 @@ class BotOut(ORM):
     max_trades_per_day: int
     paper_quote_balance: Decimal
     paper_base_balance: Decimal
+    filters: dict[str, Any] = Field(default_factory=dict)
+    sizing_mode: str = "fixed"
+    risk_pct: Decimal | None = None
+    max_leverage: Decimal | None = None
     last_tick_at: datetime | None
     created_at: datetime
 
@@ -245,6 +264,8 @@ class PositionOut(ORM):
     side: PosSide
     qty: Decimal
     avg_price: Decimal
+    stop_price: Decimal | None = None
+    take_price: Decimal | None = None
     opened_at: datetime
 
 
@@ -283,7 +304,11 @@ class StrategyInfo(BaseModel):
     style: str  # day | swing
     description: str
     timeframe: str
+    family: str  # trend | reversion (define o que o filtro de ADX exige)
     params_schema: dict[str, Any]
+    trade_bars: int | None = None  # operação de duração fixa (em candles)
+    suggested_max_trades_per_day: int | None = None
+    notes: list[str] = []
 
 
 class BotSummary(BaseModel):

@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAGIC = 26051954  # identifica as ordens do OráculoInvest no MetaTrader 5
 MONTHS = "FGHJKMNQUVXZ"
 ROLL_DAYS = 3  # troca para o próximo vencimento quando faltar isso para o atual
@@ -349,10 +349,17 @@ class Handlers:
             },
         }
 
+    def account(self, args: dict) -> dict:
+        acc = self.mt5.account_info()
+        if acc is None:
+            raise self._err("Sem conta conectada no MetaTrader 5")
+        return {"balance": acc.balance, "equity": acc.equity, "margin_free": acc.margin_free, "currency": acc.currency, "leverage": acc.leverage}
+
     def handle(self, cmd: dict) -> Any:
         kind = cmd.get("type")
         fn = {"rules": self.rules, "candles": self.candles, "candles_range": self.candles_range, "tick": self.tick,
-              "open": self.open, "close": self.close, "position_status": self.position_status, "find": self.find}.get(kind)
+              "open": self.open, "close": self.close, "position_status": self.position_status, "find": self.find,
+              "account": self.account}.get(kind)
         if fn is None:
             raise CommandError(f"Comando desconhecido: {kind}")
         return fn(cmd.get("args") or {})

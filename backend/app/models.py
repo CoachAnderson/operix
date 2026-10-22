@@ -197,6 +197,8 @@ class Bot(Base):
     strategy: Mapped[str] = mapped_column(String(40))
     allow_short: Mapped[bool] = mapped_column(Boolean, default=False)  # opera vendido (forex)
     params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Filtros de entrada e stop/alvo pelo ATR (app/strategies/filters.py). {} = tudo desligado.
+    filters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     exec_mode: Mapped[ExecMode] = mapped_column(_enum(ExecMode), default=ExecMode.signals)
     venue: Mapped[Venue] = mapped_column(_enum(Venue), default=Venue.paper)
     status: Mapped[BotStatus] = mapped_column(_enum(BotStatus), default=BotStatus.stopped)
@@ -205,6 +207,11 @@ class Bot(Base):
     # Tamanho: cripto em moeda de cotação (ex.: USDT); forex em lotes.
     order_size_quote: Mapped[Decimal | None] = mapped_column(Qty)
     order_lots: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # "fixed": usa order_size_quote/order_lots · "risk": arrisca risk_pct% do saldo até o stop (app/engine/sizing.py)
+    sizing_mode: Mapped[str] = mapped_column(String(10), default="fixed")
+    risk_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 3))
+    # Valor movimentado por ordem ÷ saldo da conta. None = sem limite.
+    max_leverage: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
     # Risco (valores em moeda da conta)
     stop_loss_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 3))
     take_profit_pct: Mapped[Decimal | None] = mapped_column(Numeric(6, 3))
@@ -231,6 +238,9 @@ class Position(Base):
     avg_price: Mapped[Decimal] = mapped_column(Qty)  # preço de entrada (referência de stop/alvo)
     cost_basis: Mapped[Decimal | None] = mapped_column(Qty)  # cripto à vista: total pago, com taxa
     entry_fee: Mapped[Decimal] = mapped_column(Qty, default=Decimal("0"))
+    # Stop e alvo em PREÇO, quando calculados pelo ATR na entrada (senão valem os percentuais do robô).
+    stop_price: Mapped[Decimal | None] = mapped_column(Qty)
+    take_price: Mapped[Decimal | None] = mapped_column(Qty)
     external_id: Mapped[str | None] = mapped_column(String(40))  # cTrader: positionId · MT5: "CONTRATO:ticket"
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

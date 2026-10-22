@@ -181,3 +181,14 @@ async def test_backtest_api(client, db, plans, monkeypatch):
     body.update(params={"timeframe": "1m"}, start="2024-01-01")
     res = await client.post("/api/v1/backtest", json=body, headers=headers)
     assert res.status_code == 400  # período longo demais para 1 minuto
+
+    # Com filtros: período de confirmação e comparação com a versão sem filtros
+    body.update(params={"timeframe": "1h"}, start="2025-01-01", filters={"regime": True, "htf": "4h", "stop_atr": 1.5, "take_atr": 3}, oos_pct=30)
+    res = await client.post("/api/v1/backtest", json=body, headers=headers)
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert [s["label"] for s in data["segments"]] == ["Ajuste", "Confirmação"]
+    assert "baseline" in data and data["baseline"]["metrics"]["trades"] >= data["metrics"]["trades"]
+    assert data["filtered_entries"] >= 0 and isinstance(data["filter_reasons"], list)
+    res = await client.post("/api/v1/backtest", json={**body, "filters": {"htf": "15m"}}, headers=headers)
+    assert res.status_code == 422  # tempo maior precisa ser maior que 1h

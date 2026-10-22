@@ -126,6 +126,16 @@ class MT5Broker:
             return (bid + ask) / 2
         raise BrokerError(f"Sem cotação de {symbol} agora (mercado fechado?)", retryable=True)
 
+    async def account_balance(self, symbol: str) -> Decimal:
+        """Patrimônio da conta no MetaTrader 5 (saldo + resultado aberto). Requer conector 1.1+."""
+        try:
+            data = await self._call("account", {})
+        except BrokerError as exc:
+            if "desconhecido" in str(exc):
+                raise BrokerError("Atualize o Conector OráculoInvest (versão 1.1 ou mais nova) para o robô ler o saldo da conta") from exc
+            raise
+        return D(data.get("equity") or data.get("balance") or 0)
+
     # ---------------- ordens ----------------
     @staticmethod
     def _contracts(rules: SymbolRules, units: Decimal) -> Decimal:

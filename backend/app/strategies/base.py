@@ -25,6 +25,7 @@ class Decision:
 
     target: Target | None
     reason: str = ""
+    tag: str | None = None  # rótulo curto do padrão que gerou a entrada (ex.: "4x1"), usado nas estatísticas
 
     @classmethod
     def hold(cls, reason: str = "") -> Decision:
@@ -45,6 +46,14 @@ class Strategy:
     Params: ClassVar[type[StrategyParams]]
     # Day trade: tempo máximo com a posição aberta (minutos). Swing: None.
     default_max_hold_minutes: ClassVar[int | None] = None
+    # Operação de duração fixa: entra na abertura de um candle e sai no fechamento do N-ésimo candle.
+    # None = a posição dura até a estratégia mandar sair (comportamento normal).
+    trade_bars: ClassVar[int | None] = None
+    # Duração fixa: depois desse atraso (s) desde a abertura do candle, a entrada é descartada.
+    max_entry_delay_s: ClassVar[float] = 20.0
+    # Sugestões para a tela de criação e o backtest.
+    suggested_max_trades_per_day: ClassVar[int | None] = None
+    notes: ClassVar[tuple[str, ...]] = ()
 
     def parse_params(self, raw: dict[str, Any]) -> StrategyParams:
         return self.Params(**raw)
