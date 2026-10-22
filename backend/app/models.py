@@ -112,6 +112,7 @@ class User(Base):
     risk_terms_version: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    appearance: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)  # tema, cores e fonte do painel
 
     subscriptions: Mapped[list[Subscription]] = relationship(back_populates="user", lazy="noload")
 

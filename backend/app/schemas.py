@@ -4,9 +4,9 @@ import re
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator, model_validator
 
 from app.models import BotStatus, ExecMode, Market, OrderStatus, PosSide, Role, Side, SignalStatus, SubStatus, UserStatus, Venue
 from app.services import b3
@@ -68,6 +68,32 @@ class UserOut(ORM):
     totp_enabled: bool
     risk_terms_accepted_at: datetime | None
     created_at: datetime
+    appearance: dict[str, Any] | None = None
+
+
+HexColor = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+ColorKey = Literal["paper", "surface", "ink", "muted"]
+
+
+class AppearanceColors(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    light: dict[ColorKey, HexColor] = Field(default_factory=dict)
+    dark: dict[ColorKey, HexColor] = Field(default_factory=dict)
+
+
+class AppearanceIn(BaseModel):
+    """Aparência do painel. Só aceita valores conhecidos e cores #RRGGBB: o conteúdo vira CSS no navegador."""
+
+    model_config = ConfigDict(extra="forbid")
+    v: Literal[1] = 1
+    theme: Literal["auto", "light", "dark"] = "auto"
+    palette: Literal["razao", "grafite", "oceano", "floresta", "areia", "oled"] = "razao"
+    accent: HexColor | None = None
+    font: Literal["schibsted", "inter", "atkinson", "plex", "serif", "system"] = "schibsted"
+    scale: Literal[90, 100, 110, 120] = 100
+    radius: Literal["square", "default", "round"] = "default"
+    pnl: Literal["green-red", "blue-orange"] = "green-red"
+    custom: AppearanceColors = Field(default_factory=AppearanceColors)
 
 
 class AcceptRiskIn(BaseModel):

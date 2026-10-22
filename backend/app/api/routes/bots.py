@@ -364,6 +364,73 @@ async def bot_sizing_preview(bot_id: uuid.UUID, user: CurrentUser, db: DB) -> di
     return await _preview(db, await _get_bot(db, user, bot_id))
 
 
+# ---------------- Gráfico do robô ----------------
+def _ms(dt: datetime) -> int:
+    return int((dt if dt.tzinfo else dt.replace(tzinfo=UTC)).timestamp() * 1000)
+
+
+@router.get("/bots/{bot_id}/chart")
+async def bot_chart(bot_id: uuid.UUID, user: CurrentUser, db: DB, limit: int = Query(300, ge=50, le=1000)) -> dict:
+    """Candles do ativo (pela conexão do próprio cliente) com as ordens do robô e os níveis da posição aberta."""
+    await hit(f"chart:{user.id}", 120, 60)
+    bot = await _get_bot(db, user, bot_id)
+    strategy = get_strategy(bot.strategy)
+    tf = strategy.parse_params(bot.params).timeframe
+    broker = await broker_for_bot(db, bot)
+    try:
+        candles = await broker.get_klines(bot.symbol, tf, limit)
+    except (BrokerError, ValueError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Não foi possível buscar os candles na corretora: {exc}") from exc
+    finally:
+        await broker.close()
+    if not candles:
+        return {"timeframe": tf, "ohlc": [], "orders": [], "signals": [], "position": None}
+    since = datetime.fromtimestamp(candles[0].open_time / 1000, UTC)
+
+    orders = (
+        await db.scalars(
+            select(Order)
+            .where(Order.bot_id == bot.id, Order.created_at >= since, Order.price.is_not(None),
+                   Order.status.in_([OrderStatus.filled, OrderStatus.partially_filled]))
+            .order_by(Order.created_at)
+            .limit(2000)
+        )
+    ).all()
+    signals = (
+        await db.scalars(
+            select(Signal).where(Signal.bot_id == bot.id, Signal.created_at >= since).order_by(Signal.created_at).limit(500)
+        )
+    ).all() if bot.exec_mode == ExecMode.signals else []
+
+    pos = await executor.get_position(db, bot.id)
+    position = None
+    if pos:
+        sign = -1 if pos.side == PosSide.short else 1
+        avg = pos.avg_price
+        stop = pos.stop_price if pos.stop_price is not None else (
+            avg * (1 - sign * bot.stop_loss_pct / 100) if bot.stop_loss_pct else None)
+        take = pos.take_price if pos.take_price is not None else (
+            avg * (1 + sign * bot.take_profit_pct / 100) if bot.take_profit_pct else None)
+        position = {"side": pos.side.value, "avg_price": float(avg), "stop": float(stop) if stop else None,
+                    "take": float(take) if take else None, "opened_at": _ms(pos.opened_at)}
+
+    return {
+        "timeframe": tf,
+        "ohlc": [[c.open_time, c.open, c.high, c.low, c.close] for c in candles],
+        # Ordem com resultado realizado é saída; sem resultado é entrada.
+        "orders": [
+            {"time": _ms(o.created_at), "side": o.side.value, "price": float(o.price), "exit": o.realized_pnl is not None,
+             "pnl": float(o.realized_pnl) if o.realized_pnl is not None else None, "reason": o.reason[:160]}
+            for o in orders
+        ],
+        "signals": [
+            {"time": _ms(x.created_at), "side": x.side.value, "price": float(x.ref_price), "status": x.status.value}
+            for x in signals
+        ],
+        "position": position,
+    }
+
+
 # ---------------- Sinais ----------------
 @router.get("/signals", response_model=list[SignalOut])
 async def list_signals(

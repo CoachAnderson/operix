@@ -25,6 +25,7 @@ from app.core.security import (
 from app.models import Bot, BotStatus, ExchangeCredential, User, UserStatus
 from app.schemas import (
     AcceptRiskIn,
+    AppearanceIn,
     ChangePasswordIn,
     LoginIn,
     RegisterIn,
@@ -148,6 +149,22 @@ async def logout_all(user: CurrentUser, request: Request, response: Response, db
 # ---------- Conta do usuário ----------
 @me_router.get("", response_model=UserOut)
 async def me(user: CurrentUser) -> User:
+    return user
+
+
+@me_router.put("/appearance", response_model=UserOut)
+async def save_appearance(body: AppearanceIn, user: CurrentUser, db: DB) -> User:
+    """Tema, cores, fonte e tamanho do texto do painel; vale em todos os aparelhos da conta."""
+    await hit(f"appearance:{user.id}", limit=120, window_seconds=600)
+    user.appearance = body.model_dump(mode="json")
+    await db.commit()
+    return user
+
+
+@me_router.delete("/appearance", response_model=UserOut)
+async def reset_appearance(user: CurrentUser, db: DB) -> User:
+    user.appearance = None
+    await db.commit()
     return user
 
 
