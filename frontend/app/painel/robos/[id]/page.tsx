@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { OrdersTable } from "@/components/OrdersTable";
 import { TradingViewWidget } from "@/components/TradingViewWidget";
+import { BotChart } from "@/components/BotChart";
 import { ErrorText, Loading, StatusTag, Stripe, VenueTag, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
 import { B3_POINT_VALUE, MODE_LABEL, dateTime, money, pnlClass, price, qty, signed, venueLabel } from "@/lib/format";
@@ -23,6 +24,7 @@ export default function BotDetailPage() {
   const preview = useApi<SizingPreview>(`/bots/${id}/sizing-preview`);
   const action = useAction();
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
+  const [chartView, setChartView] = useState<"robo" | "tv">("robo");
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -168,7 +170,26 @@ export default function BotDetailPage() {
       </dl>
 
       <section className="section">
-        <TradingViewWidget heading={<h2>Gráfico</h2>} symbol={b.symbol} market={b.market} timeframe={String(b.params.timeframe ?? "1h")} strategy={b.strategy} />
+        {(() => {
+          const heading = (
+            <div className="page-head" style={{ marginBottom: 0, alignItems: "center" }}>
+              <h2>Gráfico</h2>
+              <div className="presets" role="group" aria-label="Tipo de gráfico">
+                <button type="button" className="btn" aria-pressed={chartView === "robo"} onClick={() => setChartView("robo")}>
+                  Entradas do robô
+                </button>
+                <button type="button" className="btn" aria-pressed={chartView === "tv"} onClick={() => setChartView("tv")}>
+                  TradingView (análise)
+                </button>
+              </div>
+            </div>
+          );
+          return chartView === "robo" ? (
+            <BotChart botId={b.id} heading={heading} />
+          ) : (
+            <TradingViewWidget heading={heading} symbol={b.symbol} market={b.market} timeframe={String(b.params.timeframe ?? "1h")} strategy={b.strategy} />
+          );
+        })()}
       </section>
 
       <section className="section">

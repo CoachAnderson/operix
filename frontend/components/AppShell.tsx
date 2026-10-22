@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { Signal, User } from "@/lib/types";
 import { BRAND } from "@/lib/brand";
 import { Logo } from "@/components/Logo";
+import { ThemeToggle, syncFromAccount } from "@/components/Appearance";
 
 const UserContext = createContext<{ user: User; refresh: () => Promise<void> } | null>(null);
 
@@ -26,7 +27,9 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
 
   async function refresh() {
     try {
-      setUser(await api<User>("/me"));
+      const me = await api<User>("/me");
+      syncFromAccount(me.appearance);
+      setUser(me);
     } catch {
       router.replace(`/entrar?voltar=${encodeURIComponent(pathname)}`);
     }
@@ -73,6 +76,7 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
           { href: "/painel/corretora", label: "Corretora" },
           { href: "/painel/assinatura", label: "Assinatura" },
           { href: "/painel/seguranca", label: "Segurança" },
+          { href: "/painel/aparencia", label: "Aparência" },
         ]
       : [
           { href: "/admin", label: "Visão geral" },
@@ -111,6 +115,7 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
                 Aprender: aulas de 5 min
               </Link>
             )}
+            <ThemeToggle account />
             <span>{user.name}</span>
             {user.role === "admin" && (
               <Link href={area === "admin" ? "/painel" : "/admin"}>{area === "admin" ? "Ir para meu painel" : "Painel admin"}</Link>

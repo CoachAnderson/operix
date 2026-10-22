@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { money } from "@/lib/format";
 import { FullscreenFrame } from "./FullscreenFrame";
+import { useAppearanceVersion } from "./Appearance";
 
 export type OHLC = [number, number, number, number, number]; // tempo (ms), abertura, máxima, mínima, fechamento
 export interface ChartTrade {
@@ -25,6 +26,7 @@ function cssVar(name: string): string {
  */
 export function CandleChart({ ohlc, trades, title = "Operações no gráfico", heading }: { ohlc: OHLC[]; trades: ChartTrade[]; title?: string; heading?: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
+  const version = useAppearanceVersion(); // redesenha com as cores do tema quando ele muda
 
   useEffect(() => {
     if (!box.current || ohlc.length < 2) return;
@@ -104,7 +106,7 @@ export function CandleChart({ ohlc, trades, title = "Operações no gráfico", h
       disposed = true;
       cleanup();
     };
-  }, [ohlc, trades]);
+  }, [ohlc, trades, version]);
 
   return (
     <FullscreenFrame title={title} heading={heading}>

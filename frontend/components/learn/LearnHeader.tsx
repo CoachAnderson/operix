@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
+import { ThemeToggle } from "@/components/Appearance";
 
 export function LearnHeader() {
   const path = usePathname();
@@ -26,6 +27,7 @@ export function LearnHeader() {
         </Link>
       </nav>
       <div className="actions">
+        <ThemeToggle compact />
         {logged ? (
           <Link className="btn" href="/painel">
             Ir para o painel

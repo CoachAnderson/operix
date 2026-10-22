@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useAppearanceVersion } from "@/components/Appearance";
+import { isDark } from "@/lib/appearance";
 import { FullscreenFrame } from "./FullscreenFrame";
 
 /** Mapa do tempo gráfico do robô para o formato do TradingView. */
@@ -20,14 +22,11 @@ export function TradingViewWidget({ symbol, market = "crypto", timeframe = "1h",
   const tvSymbol = market === "forex" ? `FX:${symbol}` : market === "b3" ? `BMFBOVESPA:${symbol}1!` : `BINANCE:${symbol}`;
   const box = useRef<HTMLDivElement>(null);
   const [dark, setDark] = useState(false);
+  const version = useAppearanceVersion(); // tema do aparelho ou escolhido em Aparência
 
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    setDark(mq.matches);
-    const on = (e: MediaQueryListEvent) => setDark(e.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
+    setDark(isDark());
+  }, [version]);
 
   useEffect(() => {
     const el = box.current;

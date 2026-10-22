@@ -13,6 +13,7 @@ export interface User {
   risk_terms_accepted_at: string | null;
   created_at: string;
   last_login_at?: string | null;
+  appearance?: Record<string, unknown> | null;
 }
 
 export interface Plan {
