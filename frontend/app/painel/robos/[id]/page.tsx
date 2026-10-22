@@ -8,7 +8,9 @@ import { TradingViewWidget } from "@/components/TradingViewWidget";
 import { ErrorText, Loading, StatusTag, Stripe, VenueTag, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
 import { B3_POINT_VALUE, MODE_LABEL, dateTime, money, pnlClass, price, qty, signed, venueLabel } from "@/lib/format";
-import type { BotSummary, Credential, Order, Venue } from "@/lib/types";
+import type { BotFilters, BotSummary, Credential, Order, SizingPreview, StrategyInfo, Venue } from "@/lib/types";
+import { FiltersFields, activeFilters, cleanFilters } from "@/components/FiltersFields";
+import { PreviewCard } from "@/components/SizingPreview";
 
 export default function BotDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +18,9 @@ export default function BotDetailPage() {
   const summary = useApi<BotSummary>(`/bots/${id}`);
   const orders = useApi<Order[]>(`/orders?bot_id=${id}&limit=50`);
   const { data: creds } = useApi<Credential[]>("/credentials");
+  const { data: strategies } = useApi<StrategyInfo[]>("/strategies");
+  const [editFilters, setEditFilters] = useState<BotFilters>({});
+  const preview = useApi<SizingPreview>(`/bots/${id}/sizing-preview`);
   const action = useAction();
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
 
@@ -46,6 +51,7 @@ export default function BotDetailPage() {
   }
 
   function startEdit() {
+    setEditFilters(b.filters ?? {});
     setEdit({
       exec_mode: b.exec_mode,
       venue: b.venue,
@@ -57,6 +63,9 @@ export default function BotDetailPage() {
       take_profit_pct: b.take_profit_pct ?? "",
       max_daily_loss_quote: b.max_daily_loss_quote ?? "",
       max_trades_per_day: String(b.max_trades_per_day),
+      sizing_mode: b.sizing_mode ?? "fixed",
+      risk_pct: b.risk_pct ?? "1",
+      max_leverage: b.max_leverage ?? "",
     });
   }
 
@@ -73,11 +82,15 @@ export default function BotDetailPage() {
       take_profit_pct: edit.take_profit_pct || null,
       max_daily_loss_quote: edit.max_daily_loss_quote || null,
       max_trades_per_day: Number(edit.max_trades_per_day),
+      filters: cleanFilters(editFilters),
+      sizing_mode: edit.sizing_mode,
+      risk_pct: edit.sizing_mode === "risk" ? edit.risk_pct || null : null,
+      max_leverage: edit.max_leverage || null,
     };
     const ok = await action.run(() => api(`/bots/${id}`, { method: "PATCH", json: body }));
     if (ok) {
       setEdit(null);
-      await summary.reload();
+      await Promise.all([summary.reload(), preview.reload()]);
     }
   }
 
@@ -165,8 +178,12 @@ export default function BotDetailPage() {
             {s.position.side === "short" ? "Vendido" : "Comprado"} em{" "}
             {isB3 ? `${qty(Number(s.position.qty) / (B3_POINT_VALUE[b.symbol] ?? 1))} contrato(s) de ${b.symbol}` : `${qty(s.position.qty)}${forex ? " unidades" : ""}`} a {price(s.position.avg_price)}, desde{" "}
             {dateTime(s.position.opened_at)}.
-            {b.stop_loss_pct && ` Stop em ${price(Number(s.position.avg_price) * (1 - (sign * Number(b.stop_loss_pct)) / 100))}.`}
-            {b.take_profit_pct && ` Alvo em ${price(Number(s.position.avg_price) * (1 + (sign * Number(b.take_profit_pct)) / 100))}.`}
+            {s.position.stop_price
+              ? ` Stop pelo ATR em ${price(s.position.stop_price)}.`
+              : b.stop_loss_pct && ` Stop em ${price(Number(s.position.avg_price) * (1 - (sign * Number(b.stop_loss_pct)) / 100))}.`}
+            {s.position.take_price
+              ? ` Alvo pelo ATR em ${price(s.position.take_price)}.`
+              : b.take_profit_pct && ` Alvo em ${price(Number(s.position.avg_price) * (1 + (sign * Number(b.take_profit_pct)) / 100))}.`}
             {margin && " Stop e alvo também ficam registrados na corretora."}
             {isB3 && b.strategy === "ema_cross_day" && " Day trade: zera 10 minutos antes do fim do pregão."}
           </p>
@@ -183,15 +200,34 @@ export default function BotDetailPage() {
         {!edit ? (
           <dl className="figures">
             <div>
-              <dt>{margin ? lotsLabel : "Valor por ordem"}</dt>
+              <dt>{b.sizing_mode === "risk" ? "Tamanho" : margin ? lotsLabel : "Valor por ordem"}</dt>
               <dd style={{ fontSize: "1.1rem" }}>
-                {margin ? `${isB3 ? qty(b.order_lots) : money(b.order_lots)}${b.allow_short ? ", compra e venda" : ", só compra"}` : money(b.order_size_quote)}
+                {b.sizing_mode === "risk"
+                  ? `Arrisca ${money(b.risk_pct)}% do saldo`
+                  : margin
+                    ? `${isB3 ? qty(b.order_lots) : money(b.order_lots)}${b.allow_short ? ", compra e venda" : ", só compra"}`
+                    : money(b.order_size_quote)}
               </dd>
             </div>
-            <div><dt>Stop loss</dt><dd style={{ fontSize: "1.1rem" }}>{b.stop_loss_pct ? `${money(b.stop_loss_pct)}%` : "Desligado"}</dd></div>
-            <div><dt>Alvo de lucro</dt><dd style={{ fontSize: "1.1rem" }}>{b.take_profit_pct ? `${money(b.take_profit_pct)}%` : "Desligado"}</dd></div>
+            {margin && (
+              <div>
+                <dt>Alavancagem máxima</dt>
+                <dd style={{ fontSize: "1.1rem" }}>{b.max_leverage ? `${money(b.max_leverage, 1)}×` : "Sem limite"}</dd>
+              </div>
+            )}
+            <div><dt>Stop loss</dt><dd style={{ fontSize: "1.1rem" }}>{b.filters?.stop_atr ? `${money(b.filters.stop_atr, 1)} × ATR` : b.stop_loss_pct ? `${money(b.stop_loss_pct)}%` : "Desligado"}</dd></div>
+            <div><dt>Alvo de lucro</dt><dd style={{ fontSize: "1.1rem" }}>{b.filters?.take_atr ? `${money(b.filters.take_atr, 1)} × ATR` : b.take_profit_pct ? `${money(b.take_profit_pct)}%` : "Desligado"}</dd></div>
             <div><dt>Perda máxima/dia</dt><dd style={{ fontSize: "1.1rem" }}>{b.max_daily_loss_quote ? money(b.max_daily_loss_quote) : "Sem limite"}</dd></div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <dt>Filtros de entrada</dt>
+              <dd style={{ fontSize: "1rem", fontWeight: 500 }}>{activeFilters(b.filters ?? {}).join(" · ") || "Nenhum"}</dd>
+            </div>
           </dl>
+        ) : null}
+        {!edit ? (
+          <div style={{ marginTop: 12 }}>
+            <PreviewCard data={preview.data} loading={preview.loading} />
+          </div>
         ) : (
           <form className="form panel" onSubmit={saveEdit} style={{ maxWidth: 720 }}>
             <div className="grid-2">
@@ -243,6 +279,25 @@ export default function BotDetailPage() {
                 </label>
               )}
               <label>
+                Tamanho
+                <select value={edit.sizing_mode} onChange={(e) => setEdit({ ...edit, sizing_mode: e.target.value })}>
+                  <option value="risk">Pelo risco (% do saldo)</option>
+                  <option value="fixed">Fixo</option>
+                </select>
+              </label>
+              {edit.sizing_mode === "risk" && (
+                <label>
+                  Risco por operação (% do saldo)
+                  <input type="number" required min="0.05" max="10" step="0.05" value={edit.risk_pct} onChange={(e) => setEdit({ ...edit, risk_pct: e.target.value })} />
+                </label>
+              )}
+              {margin && (
+                <label>
+                  Alavancagem máxima
+                  <input type="number" min="0.1" max="500" step="0.1" placeholder="Sem limite" value={edit.max_leverage} onChange={(e) => setEdit({ ...edit, max_leverage: e.target.value })} />
+                </label>
+              )}
+              <label>
                 Stop loss (%)
                 <input type="number" min="0.1" max="50" step="any" value={edit.stop_loss_pct} onChange={(e) => setEdit({ ...edit, stop_loss_pct: e.target.value })} />
               </label>
@@ -256,9 +311,15 @@ export default function BotDetailPage() {
               </label>
               <label>
                 Máximo de ordens por dia
-                <input type="number" min="1" max="500" required value={edit.max_trades_per_day} onChange={(e) => setEdit({ ...edit, max_trades_per_day: e.target.value })} />
+                <input type="number" min="1" max="3000" required value={edit.max_trades_per_day} onChange={(e) => setEdit({ ...edit, max_trades_per_day: e.target.value })} />
               </label>
             </div>
+            <FiltersFields
+              value={editFilters}
+              onChange={setEditFilters}
+              timeframe={String(b.params.timeframe ?? "1h")}
+              family={strategies?.find((x) => x.code === b.strategy)?.family ?? "trend"}
+            />
             <div className="actions">
               <button className="btn btn-primary" disabled={action.busy}>Salvar ajustes</button>
               <button type="button" className="btn btn-quiet" onClick={() => setEdit(null)}>Cancelar</button>

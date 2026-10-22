@@ -520,3 +520,37 @@ details summary { cursor: pointer; font-weight: 600; }
 .mt5-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 8px 16px; }
 .mt5-facts dt { font-size: var(--step--1); color: var(--muted); }
 .mt5-facts dd { margin: 2px 0 0; font-weight: 550; }
+
+/* Filtros de entrada */
+.flt-box { border: 1px solid var(--rule); border-radius: var(--radius-m); background: var(--surface); padding: 0; }
+.flt-box > summary { cursor: pointer; padding: 14px 16px; display: grid; gap: 2px; list-style: none; }
+.flt-box > summary::-webkit-details-marker { display: none; }
+.flt-box > summary::after { content: "Mostrar ▾"; font-size: var(--step--1); color: var(--muted); justify-self: start; margin-top: 4px; }
+.flt-box[open] > summary::after { content: "Esconder ▴"; }
+.flt { border-top: 1px solid var(--rule); padding: 12px 16px; display: grid; gap: 10px; }
+.flt.on { background: color-mix(in srgb, var(--sim) 5%, var(--surface)); }
+.flt-head { align-items: flex-start; }
+.flt-head > span { display: grid; gap: 2px; }
+.flt-head strong { font-weight: 600; }
+.flt-body { display: grid; gap: 10px; padding-left: 26px; }
+
+/* Backtest: ajuste × confirmação e com × sem filtros */
+.rb { display: grid; gap: 10px; }
+.rb h3 { font-size: var(--step-1); }
+.rb-table th[scope="row"] { font-weight: 500; color: var(--ink); white-space: normal; }
+.rb-table thead th { vertical-align: bottom; }
+.rb-dates { display: block; font-weight: 400; font-size: .75rem; color: var(--muted); }
+.rb-verdict { padding: 12px 14px; border-radius: var(--radius-m); background: var(--surface); border: 1px solid var(--rule); color: var(--ink) !important; max-width: none; }
+.rb-verdict.gain { border-color: color-mix(in srgb, var(--gain) 45%, transparent); background: color-mix(in srgb, var(--gain) 8%, var(--surface)); }
+.rb-verdict.loss { border-color: color-mix(in srgb, var(--loss) 45%, transparent); background: color-mix(in srgb, var(--loss) 7%, var(--surface)); }
+
+/* Tamanho e alavancagem */
+.sz-card { border: 1px solid var(--rule); border-radius: var(--radius-m); background: var(--surface); padding: 14px 16px; display: grid; gap: 10px; transition: opacity .15s; }
+.sz-card.is-loading { opacity: .6; }
+.sz-blocked { border-color: color-mix(in srgb, var(--loss) 45%, transparent); background: var(--danger-bg); }
+.sz-blocked span { color: var(--ink); }
+.sz-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); gap: 8px 16px; }
+.sz-facts dt { font-size: var(--step--1); color: var(--muted); }
+.sz-facts dd { margin: 2px 0 0; font-weight: 650; font-size: 1.05rem; }
+.sz-sub { font-weight: 400; font-size: var(--step--1); }
+.warn, .warn-text { color: var(--test); }

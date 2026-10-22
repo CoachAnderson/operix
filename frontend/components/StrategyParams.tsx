@@ -13,6 +13,7 @@ export const PARAM_LABELS: Record<string, string> = {
   entry_period: "Períodos para entrada",
   exit_period: "Períodos para saída",
   max_hold_minutes: "Tempo máximo posicionado (min)",
+  min_majority: "Candles na mesma direção, entre os 5 (3 a 5)",
 };
 export const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
@@ -48,8 +49,13 @@ export function StrategyParamsFields({
         k === "timeframe" ? (
           <label key={k}>
             {PARAM_LABELS[k]}
-            <select value={params[k] ?? ""} onChange={(e) => onChange({ ...params, [k]: e.target.value })}>
-              {TIMEFRAMES.map((t) => (
+            <select
+              value={params[k] ?? ""}
+              disabled={!!prop.const}
+              title={prop.const ? "Esta estratégia só funciona neste tempo gráfico" : undefined}
+              onChange={(e) => onChange({ ...params, [k]: e.target.value })}
+            >
+              {(prop.const ? [prop.const] : prop.enum ?? TIMEFRAMES).map((t) => (
                 <option key={t}>{t}</option>
               ))}
             </select>

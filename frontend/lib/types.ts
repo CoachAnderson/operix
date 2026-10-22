@@ -69,6 +69,10 @@ export interface Bot {
   max_trades_per_day: number;
   paper_quote_balance: string;
   paper_base_balance: string;
+  filters: BotFilters;
+  sizing_mode: "fixed" | "risk";
+  risk_pct: string | null;
+  max_leverage: string | null;
   last_tick_at: string | null;
   created_at: string;
   user_id?: string;
@@ -76,7 +80,7 @@ export interface Bot {
 
 export interface BotSummary {
   bot: Bot;
-  position: { side: "long" | "short"; qty: string; avg_price: string; opened_at: string } | null;
+  position: { side: "long" | "short"; qty: string; avg_price: string; stop_price: string | null; take_price: string | null; opened_at: string } | null;
   realized_pnl_today: string;
   realized_pnl_total: string;
   trades_today: number;
@@ -117,9 +121,13 @@ export interface StrategyInfo {
   style: "day" | "swing";
   description: string;
   timeframe: string;
+  family: "trend" | "reversion";
   params_schema: {
-    properties: Record<string, { type?: string; default?: unknown; minimum?: number; maximum?: number; title?: string; description?: string; enum?: string[]; anyOf?: unknown[] }>;
+    properties: Record<string, { type?: string; default?: unknown; minimum?: number; maximum?: number; title?: string; description?: string; enum?: string[]; const?: string; anyOf?: unknown[] }>;
   };
+  trade_bars?: number | null;
+  suggested_max_trades_per_day?: number | null;
+  notes?: string[];
 }
 
 export interface ReportSymbol {
@@ -138,4 +146,40 @@ export interface Mt5Status {
   terminal: { trade_allowed: boolean; connected: boolean; build: number | null } | null;
   limits: { roots: string[]; max_contracts: number } | null;
   agent_version: string | null;
+}
+
+/** Filtros de entrada e stop/alvo pelo ATR (campos ausentes = padrão do servidor). */
+export interface BotFilters {
+  regime?: boolean;
+  adx_period?: number;
+  adx_level?: number;
+  htf?: string | null;
+  htf_ema?: number;
+  hours_start?: string | null;
+  hours_end?: string | null;
+  atr_period?: number;
+  atr_min_pct?: number | null;
+  atr_max_pct?: number | null;
+  stop_atr?: number | null;
+  take_atr?: number | null;
+}
+
+/** Prévia do tamanho da próxima entrada (POST /bots/sizing-preview ou GET /bots/{id}/sizing-preview). */
+export interface SizingPreview {
+  ok: boolean;
+  message?: string;
+  currency?: string;
+  unit?: string | null; // "lotes" | "contratos" | null (cripto)
+  units?: string | null;
+  quote_amount?: string | null;
+  price?: string;
+  notional?: string;
+  balance?: string | null;
+  leverage?: string | null;
+  stop?: string | null;
+  risk_money?: string | null;
+  risk_pct?: string | null;
+  lots?: string | null;
+  capped?: boolean;
+  note?: string;
 }

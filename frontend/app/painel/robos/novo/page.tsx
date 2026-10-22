@@ -10,6 +10,9 @@ import { VENUE_HINT, venueLabel } from "@/lib/format";
 import type { Bot, Credential, ExecMode, Market, StrategyInfo, Subscription, Venue } from "@/lib/types";
 import { BinanceSignup } from "@/components/BinanceSignup";
 import { STRATEGY_LESSON } from "@/lib/learn/lessons";
+import { FiltersFields, cleanFilters } from "@/components/FiltersFields";
+import { LiveSizingPreview } from "@/components/SizingPreview";
+import type { BotFilters } from "@/lib/types";
 
 /** O que muda na tela conforme o mercado. */
 const MARKETS: Record<
@@ -68,6 +71,7 @@ export default function NewBotPage() {
 
   const [strategy, setStrategy] = useState<string>("");
   const [params, setParams] = useState<Record<string, string>>({});
+  const [filters, setFilters] = useState<BotFilters>({});
   const [form, setForm] = useState({
     market: "crypto" as Market,
     name: "",
@@ -83,6 +87,9 @@ export default function NewBotPage() {
     max_daily_loss_quote: "",
     max_trades_per_day: "10",
     paper_quote_balance: "1000",
+    sizing_mode: "risk" as "fixed" | "risk",
+    risk_pct: "1",
+    max_leverage: "",
   });
 
   const m = MARKETS[form.market];
@@ -101,7 +108,11 @@ export default function NewBotPage() {
   function chooseStrategy(s: StrategyInfo) {
     setStrategy(s.code);
     setParams(defaultParams(s));
-    if (!form.name) setForm((f) => ({ ...f, name: s.name }));
+    setForm((f) => ({
+      ...f,
+      name: f.name || s.name,
+      max_trades_per_day: s.suggested_max_trades_per_day ? String(s.suggested_max_trades_per_day) : f.max_trades_per_day,
+    }));
   }
 
   function chooseMarket(market: Market) {
@@ -116,15 +127,15 @@ export default function NewBotPage() {
       stop_loss_pct: cfg.sl,
       take_profit_pct: cfg.tp,
       paper_quote_balance: cfg.paper,
+      max_leverage: market === "crypto" ? "" : "10",
     }));
   }
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm({ ...form, [k]: e.target.value });
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const body = {
+  function buildBody() {
+    return {
       name: form.name,
       market: form.market,
       symbol: form.symbol.trim().toUpperCase().replace("/", ""),
@@ -141,7 +152,16 @@ export default function NewBotPage() {
       max_daily_loss_quote: form.max_daily_loss_quote || null,
       max_trades_per_day: Number(form.max_trades_per_day),
       paper_quote_balance: form.paper_quote_balance,
+      filters: cleanFilters(filters),
+      sizing_mode: form.sizing_mode,
+      risk_pct: form.sizing_mode === "risk" ? form.risk_pct || null : null,
+      max_leverage: form.max_leverage || null,
     };
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const body = buildBody();
     const bot = await run(() => api<Bot>("/bots", { json: body }));
     if (bot) router.push(`/painel/robos/${bot.id}`);
   }
@@ -190,6 +210,16 @@ export default function NewBotPage() {
               </div>
             </div>
           ))}
+          {selected?.notes && selected.notes.length > 0 && (
+            <div className="notice small">
+              <strong>Como &quot;{selected.name}&quot; opera</strong>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                {selected.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {selected && STRATEGY_LESSON[selected.code] && (
             <p className="small">
               <a href={`/aprender/${STRATEGY_LESSON[selected.code]}`} target="_blank" rel="noopener">
@@ -204,6 +234,10 @@ export default function NewBotPage() {
             <legend>Parâmetros</legend>
             <StrategyParamsFields strategy={selected} params={params} onChange={setParams} />
           </fieldset>
+        )}
+
+        {selected && (
+          <FiltersFields value={filters} onChange={setFilters} timeframe={params.timeframe || selected.timeframe} family={selected.family} />
         )}
 
         <div className="grid-2">
@@ -227,7 +261,7 @@ export default function NewBotPage() {
             <label>
               {forex ? "Símbolo" : "Par"}
               <span className="hint">{forex ? "Como aparece no cTrader, ex.: EURUSD, GBPUSD, XAUUSD" : "Formato da Binance, ex.: BTCUSDT, ETHUSDT"}</span>
-              <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
+              <input required pattern="[A-Za-z0-9\/]{5,20}" value={form.symbol} onChange={set("symbol")} />
             </label>
           )}
         </div>
@@ -343,8 +377,34 @@ export default function NewBotPage() {
 
         <fieldset>
           <legend>Tamanho e limites de risco</legend>
+          <div className="choice">
+            <label>
+              <input type="radio" name="sizing" checked={form.sizing_mode === "risk"} onChange={() => setForm({ ...form, sizing_mode: "risk" })} />
+              Pelo risco (recomendado)
+              <span className="hint">Você diz quanto do saldo aceita perder se o stop for atingido; o robô calcula o tamanho de cada ordem.</span>
+            </label>
+            <label>
+              <input type="radio" name="sizing" checked={form.sizing_mode === "fixed"} onChange={() => setForm({ ...form, sizing_mode: "fixed" })} />
+              Tamanho fixo
+              <span className="hint">Sempre o mesmo {b3 ? "número de contratos" : forex ? "número de lotes" : "valor"}, não importa o stop nem o saldo.</span>
+            </label>
+          </div>
           <div className="grid-2">
-            {b3 ? (
+            {form.sizing_mode === "risk" && (
+              <label>
+                Risco por operação (% do saldo)
+                <span className="hint">Quanto perde se o stop for atingido. Profissionais costumam usar de 0,5% a 1%.</span>
+                <input type="number" required min="0.05" max="10" step="0.05" value={form.risk_pct} onChange={set("risk_pct")} />
+              </label>
+            )}
+            {form.market !== "crypto" && (
+              <label>
+                Alavancagem máxima
+                <span className="hint">O robô reduz o tamanho para o valor movimentado não passar de X vezes o saldo. Vazio = sem limite.</span>
+                <input type="number" min="0.1" max="500" step="0.1" value={form.max_leverage} onChange={set("max_leverage")} placeholder="Sem limite" />
+              </label>
+            )}
+            {form.sizing_mode === "risk" ? null : b3 ? (
               <label>
                 Contratos por ordem
                 <span className="hint">O conector no seu computador também tem um limite máximo por ordem.</span>
@@ -364,7 +424,7 @@ export default function NewBotPage() {
             )}
             <label>
               Máximo de ordens por dia
-              <input type="number" required min="1" max="500" value={form.max_trades_per_day} onChange={set("max_trades_per_day")} />
+              <input type="number" required min="1" max="3000" value={form.max_trades_per_day} onChange={set("max_trades_per_day")} />
             </label>
             <label>
               Stop loss (%)
@@ -375,12 +435,14 @@ export default function NewBotPage() {
                     ? "Enviado à corretora junto com a ordem. 0,5% ≈ 50 pips no EURUSD."
                     : "Vende se cair isso desde a compra. Vazio desliga."}
               </span>
-              <input type="number" min="0.01" max="50" step="any" value={form.stop_loss_pct} onChange={set("stop_loss_pct")} />
+              <input type="number" min="0.01" max="50" step="any" value={form.stop_loss_pct} onChange={set("stop_loss_pct")} disabled={!!filters.stop_atr} />
+              {filters.stop_atr ? <span className="hint">Usando o stop pelo ATR ({filters.stop_atr}×) dos filtros.</span> : null}
             </label>
             <label>
               Alvo de lucro (%)
               <span className="hint">{margin ? "Também fica na corretora, mesmo se o sistema cair." : "Vende se subir isso desde a compra. Vazio desliga."}</span>
-              <input type="number" min="0.01" max="500" step="any" value={form.take_profit_pct} onChange={set("take_profit_pct")} />
+              <input type="number" min="0.01" max="500" step="any" value={form.take_profit_pct} onChange={set("take_profit_pct")} disabled={!!filters.take_atr} />
+              {filters.take_atr ? <span className="hint">Usando o alvo pelo ATR ({filters.take_atr}×) dos filtros.</span> : null}
             </label>
             <label>
               Perda máxima no dia
@@ -388,6 +450,10 @@ export default function NewBotPage() {
               <input type="number" min="1" step="any" value={form.max_daily_loss_quote} onChange={set("max_daily_loss_quote")} />
             </label>
           </div>
+          {form.sizing_mode === "risk" && !form.stop_loss_pct && !filters.stop_atr && (
+            <p className="form-error">O tamanho pelo risco precisa de um stop: preencha o stop loss ou ligue o stop pelo ATR nos filtros.</p>
+          )}
+          <LiveSizingPreview body={buildBody()} enabled={!!strategy && (!needsCred || !!form.credential_id)} />
         </fieldset>
 
         <ErrorText>{error}</ErrorText>

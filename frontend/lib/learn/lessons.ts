@@ -556,7 +556,7 @@ export const MODULES: Module[] = [
           { visual: "risk", title: "Calculadora de tamanho da posição" },
           { visual: "recovery", title: "Por que perder pouco importa tanto" },
           {
-            tip: "Em cada robô do OráculoInvest você define stop, alvo, perda máxima por dia (o robô pausa sozinho ao atingir) e limite de operações por dia. No forex, stop e alvo vão para a corretora junto com a ordem.",
+            tip: "Ao criar um robô no OráculoInvest, escolha o tamanho **pelo risco**: você diz quanto do saldo aceita perder no stop (ex.: 1%) e o robô faz essa conta a cada ordem. A prévia mostra o valor movimentado e a alavancagem antes de ligar, e o limite de alavancagem corta ordens grandes demais. Stop, alvo, perda máxima por dia e limite de operações também ficam no robô.",
           },
         ],
         quiz: [

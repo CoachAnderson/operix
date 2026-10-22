@@ -9,7 +9,10 @@ import { StrategyParamsFields, cleanParams, defaultParams } from "@/components/S
 import { ErrorText, Loading, PageHead, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
 import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
-import type { BotSummary, Credential, Market, StrategyInfo } from "@/lib/types";
+import type { BotFilters, BotSummary, Credential, Market, StrategyInfo } from "@/lib/types";
+import { FiltersFields, cleanFilters } from "@/components/FiltersFields";
+import { FilterCompare, SplitTable, type Segment } from "@/components/RobustnessView";
+import { StatsView, type Analysis } from "@/components/StatsView";
 
 /** Custos padrão por mercado (taxa por lado em % e escorregamento em centésimos de %). */
 const MARKET_COSTS: Record<Market, { fee_pct: string; slippage_bps: string }> = {
@@ -54,6 +57,8 @@ interface Trade {
   return_pct: number;
   fees: number;
   exit_reason: string;
+  tag?: string | null;
+  move_pct?: number;
 }
 interface Result {
   metrics: Metrics;
@@ -69,6 +74,11 @@ interface Result {
   timeframe: string;
   config: { initial_balance: number; order_size_quote: number };
   ohlc: OHLC[];
+  segments: Segment[];
+  baseline?: { metrics: Metrics; segments: Segment[] };
+  filtered_entries: number;
+  filter_reasons: { reason: string; count: number }[];
+  analysis?: Analysis;
 }
 
 const PRESETS: [string, number][] = [
@@ -113,8 +123,12 @@ function BacktestView() {
     max_daily_loss_quote: "",
     fee_pct: "0.1",
     slippage_bps: "5",
+    risk_pct: "",
+    max_leverage: "",
   });
   const [botName, setBotName] = useState<string | null>(null);
+  const [filters, setFilters] = useState<BotFilters>({});
+  const [oos, setOos] = useState("30");
 
   // Pré-preenche com a configuração de um robô (?robo=ID)
   useEffect(() => {
@@ -123,6 +137,7 @@ function BacktestView() {
       .then(({ bot }) => {
         setBotName(bot.name);
         setStrategy(bot.strategy);
+        setFilters(bot.filters ?? {});
         setParams(Object.fromEntries(Object.entries(bot.params).map(([k, v]) => [k, String(v)])));
         setForm((f) => ({
           ...f,
@@ -138,6 +153,8 @@ function BacktestView() {
           stop_loss_pct: bot.stop_loss_pct ?? "",
           take_profit_pct: bot.take_profit_pct ?? "",
           max_daily_loss_quote: bot.max_daily_loss_quote ?? "",
+          risk_pct: bot.sizing_mode === "risk" ? (bot.risk_pct ?? "") : "",
+          max_leverage: bot.max_leverage ?? "",
         }));
       })
       .catch(() => {});
@@ -198,6 +215,10 @@ function BacktestView() {
       max_daily_loss_quote: form.max_daily_loss_quote ? Number(form.max_daily_loss_quote) : null,
       fee_rate: Number(form.fee_pct) / 100,
       slippage_bps: Number(form.slippage_bps),
+      filters: cleanFilters(filters),
+      oos_pct: Number(oos),
+      risk_pct: form.risk_pct ? Number(form.risk_pct) : null,
+      max_leverage: margin && form.max_leverage ? Number(form.max_leverage) : null,
     };
     const res = await action.run(() => api<Result>("/backtest", { json: body }));
     if (res) setResult(res);
@@ -259,6 +280,7 @@ function BacktestView() {
                 const s = strategies.find((x) => x.code === e.target.value)!;
                 setStrategy(s.code);
                 setParams(defaultParams(s));
+                if (s.timeframe === "1m" && (preset === null || preset > 30)) applyPreset(30); // limite do histórico de 1 minuto
               }}
             >
               {(["day", "swing"] as const).map((style) => (
@@ -275,6 +297,12 @@ function BacktestView() {
             </select>
           </label>
           {selected && <StrategyParamsFields strategy={selected} params={params} onChange={setParams} />}
+          {selected?.trade_bars && (
+            <p className="notice small">
+              Cada operação dura {selected.trade_bars} candle: entra na abertura e sai no fechamento. Candles de 1 minuto: o teste aceita até 32 dias. Em cripto à
+              vista só entram as compras; para testar as vendas, use forex ou B3 com &quot;operar vendido&quot;.
+            </p>
+          )}
           {isB3 ? (
             <label>
               Ativo
@@ -286,7 +314,7 @@ function BacktestView() {
           ) : (
             <label>
               {forex ? "Símbolo" : "Par"}
-              <input required pattern="[A-Za-z0-9/]{5,20}" value={form.symbol} onChange={set("symbol")} />
+              <input required pattern="[A-Za-z0-9\/]{5,20}" value={form.symbol} onChange={set("symbol")} />
             </label>
           )}
           {margin && (
@@ -307,7 +335,7 @@ function BacktestView() {
             <div className="grid-2">
               <label className="small">
                 De
-                <input type="date" required min="2017-08-17" value={form.start} onChange={(e) => { setPreset(null); set("start")(e); }} />
+                <input type="date" required min={form.market === "crypto" ? "2017-08-17" : undefined} value={form.start} onChange={(e) => { setPreset(null); set("start")(e); }} />
               </label>
               <label className="small">
                 Até
@@ -341,10 +369,36 @@ function BacktestView() {
               <input type="number" min="0.1" max="50" step="any" value={form.stop_loss_pct} onChange={set("stop_loss_pct")} />
             </label>
             <label>
+              Risco por operação (%)
+              <span className="hint">Vazio = tamanho fixo. Com valor, o tamanho sai do saldo e do stop.</span>
+              <input type="number" min="0.05" max="10" step="0.05" placeholder="Fixo" value={form.risk_pct} onChange={set("risk_pct")} />
+            </label>
+            {margin && (
+              <label>
+                Alavancagem máxima
+                <span className="hint">Vazio = sem limite.</span>
+                <input type="number" min="0.1" max="500" step="0.1" placeholder="Sem limite" value={form.max_leverage} onChange={set("max_leverage")} />
+              </label>
+            )}
+            <label>
               Alvo de lucro (%)
               <input type="number" min="0.1" max="500" step="any" value={form.take_profit_pct} onChange={set("take_profit_pct")} />
             </label>
           </div>
+          {selected && (
+            <FiltersFields value={filters} onChange={setFilters} timeframe={params.timeframe || selected.timeframe} family={selected.family} />
+          )}
+          <label>
+            Período de confirmação
+            <span className="hint">Parte final do período separada para conferir se o resultado se mantém em dados que você não usou para ajustar.</span>
+            <select value={oos} onChange={(e) => setOos(e.target.value)}>
+              <option value="0">Não separar</option>
+              <option value="20">Últimos 20%</option>
+              <option value="30">Últimos 30%</option>
+              <option value="40">Últimos 40%</option>
+              <option value="50">Últimos 50%</option>
+            </select>
+          </label>
           <details>
             <summary>Custos e limites</summary>
             <div className="grid-2" style={{ marginTop: 12 }}>
@@ -425,6 +479,20 @@ function ResultView({ r }: { r: Result }) {
           </>
         )}
       </p>
+
+      {r.analysis && r.analysis.trades > 0 && <StatsView a={r.analysis} pre={pre} />}
+
+      {r.segments?.length === 2 && <SplitTable segments={r.segments} />}
+      {r.baseline && (
+        <FilterCompare
+          base={r.baseline.metrics}
+          withF={m}
+          baseSegments={r.baseline.segments}
+          segments={r.segments}
+          filtered={r.filtered_entries}
+          reasons={r.filter_reasons}
+        />
+      )}
 
       <dl className="figures" style={{ margin: 0 }}>
         <div>

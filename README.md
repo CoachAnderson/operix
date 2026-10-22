@@ -6,11 +6,16 @@ Arquitetura, modelo de dados e decisões de segurança: [`docs/ARQUITETURA.md`](
 ## O que já funciona
 
 - **Assinante**: cadastro, login com 2FA (TOTP), planos e assinatura recorrente, conexão de chaves da Binance (cifradas), criação e controle de robôs, caixa de sinais, histórico de ordens, termo de risco, troca de senha e exclusão de conta (LGPD).
-- **Robôs**: 4 estratégias (2 de day trade, 2 de swing trade), modalidade **automática** ou **por sinais**, e três ambientes: **simulação** (preço real, saldo fictício), **testnet/conta demo** e **conta real**.
+- **Robôs**: 5 estratégias (3 de day trade, incluindo a **Reversão AMS** de 1 minuto, e 2 de swing trade), modalidade **automática** ou **por sinais**, e três ambientes: **simulação** (preço real, saldo fictício), **testnet/conta demo** e **conta real**.
 - **Forex (cTrader)**: opera comprado e vendido, tamanho em lotes, stop e alvo enviados à corretora junto com a ordem, horário de mercado respeitado e fechamentos feitos pela corretora (stop, alvo, stop-out) reconciliados automaticamente.
 - **Futuros da B3 (MetaTrader 5)**: mini-índice (WIN) e mini-dólar (WDO) pela corretora do próprio cliente, com o Conector OráculoInvest rodando no Windows dele. Vencimento atual escolhido sozinho, rolagem perto do vencimento, day trade zerado antes do fim do pregão, contratos inteiros e custos da B3 na simulação e no backtest.
+- **Filtros de entrada e stop pelo ATR**: por robô, opcionais e só para entradas (saídas nunca são barradas): tipo de mercado (ADX), confirmação no tempo gráfico maior, horário de entrada (Brasília), volatilidade (ATR em % do preço) e stop/alvo em múltiplos do ATR, guardados em preço na posição. O mesmo código roda ao vivo e no backtest.
+- **Tamanho e alavancagem**: tamanho fixo ou pelo risco (% do saldo perdido se o stop for atingido; o tamanho sai da distância até o stop), limite de alavancagem por robô (o robô reduz a ordem) e prévia na tela com saldo lido da corretora, valor movimentado, alavancagem efetiva e perda no stop. O saldo vem da Binance, do cTrader, do MetaTrader 5 (conector 1.1+) ou da simulação.
+- **Motor sem atraso**: o robô decide ~1 s depois de cada fechamento de candle (não espera um ciclo fixo) e, em cripto, vigia stop e alvo com o preço da Binance em tempo real (WebSocket): quando o preço cruza o nível, a saída sai na hora. Candles, preço e saldo são consultados em paralelo antes da ordem. No cTrader e no MT5 o stop já fica na corretora.
 - **Risco**: stop loss, alvo, tempo máximo posicionado, perda máxima diária (pausa o robô), limite de ordens por dia, botão de encerrar posição e parada geral (kill switch) do admin.
-- **Backtest**: testa qualquer estratégia (ou a configuração de um robô) no histórico da Binance, sem olhar o futuro, com taxa e slippage. Mostra taxa de acerto, resultado médio por operação, ganho médio ÷ perda média, fator de lucro, queda máxima, comparação com comprar e segurar, resultado mês a mês e as operações no gráfico de candles.
+- **Backtest**: separa o período em ajuste e confirmação (fora da amostra, últimos 30% por padrão) e, com filtros ligados, roda também sem eles e mostra a comparação lado a lado. Testa qualquer estratégia (ou a configuração de um robô) no histórico da Binance, sem olhar o futuro, com taxa e slippage. Mostra taxa de acerto, resultado médio por operação, ganho médio ÷ perda média, fator de lucro, queda máxima, comparação com comprar e segurar, resultado mês a mês e as operações no gráfico de candles.
+- **Reversão AMS (1 minuto)**: olha os 5 últimos candles fechados de 1 minuto; com 3, 4 ou 5 de alta vende, com 3, 4 ou 5 de baixa compra (doji não conta). Entra na abertura do candle seguinte e sai no fechamento dele: cada operação dura exatamente 1 candle (`trade_bars = 1` em `strategies/library.py`). O robô decide ~1 s após cada fechamento, descarta a entrada se atrasar mais de 20 s e, no modo sinais, o sinal vale só até o fim do candle. Em cripto à vista só faz as compras; as vendas exigem forex ou B3 com "operar vendido". O backtest de 1 minuto aceita até 32 dias e mostra, para qualquer estratégia, o **acerto de direção** (sem custos), o intervalo de 95%, o **teste binomial contra 50%**, o movimento médio contra o custo de ida e volta e os resultados por padrão (3x2, 4x1, 5x0) e por hora.
+- **Backtester avulso da Reversão AMS** (`ferramentas/reversao_ams/`): lê um CSV de candles de 1 minuto (inclusive exportado do MetaTrader 5) e gera relatório HTML, gráficos, comparação com entrada aleatória e com "seguir a maioria", testes estatísticos e CSVs. Não depende do resto do sistema: `python reversao_ams.py candles.csv`. Um teste do backend confere que o sistema e o backtester avulso contam as mesmas operações.
 - **Aprender** (`/aprender`, aberto ao público): trilha de 17 aulas de 3 a 5 minutos em 4 módulos (primeiros passos, gráficos, estratégias, risco e robôs), com 14 gráficos interativos (dados fictícios), quiz em cada aula, progresso salvo no navegador e glossário com busca. Conteúdo em `frontend/lib/learn/lessons.ts`; para criar uma aula, basta acrescentar um item lá.
 - **Relatórios em PDF**: o assinante escolhe as moedas (as que têm posição aberta já vêm marcadas), o período e os ambientes, e baixa um PDF com resultado por ambiente, resumo por moeda, posições abertas e todas as ordens. Horário de Brasília; simulação nunca soma com conta real.
 - **Gráficos TradingView**: gráfico avançado do TradingView na tela de cada robô e gráfico de candles (TradingView Lightweight Charts) com compras e vendas marcadas no backtest.
@@ -54,7 +59,7 @@ npm run dev                              # http://localhost:3000
 ## Testes
 
 ```bash
-cd backend && pytest        # 45 testes: segurança, webhook, Binance, cTrader (servidor simulado), MetaTrader 5 (terminal simulado), estratégias, motor, backtest, relatórios e API
+cd backend && pytest        # 74 testes: segurança, webhook, Binance, cTrader (servidor simulado), MetaTrader 5 (terminal simulado), estratégias, Reversão AMS, motor, backtest, relatórios e API
 cd frontend && npm run build
 ```
 
@@ -71,6 +76,8 @@ As assinaturas recorrentes do Mercado Pago são cobradas no cartão. O webhook v
 - **Testnet**: crie chaves em https://testnet.binance.vision e cadastre como "Testnet".
 - **Conta real**: o assinante cria a chave com leitura + negociação Spot, **sem saque** e com restrição ao IP do servidor (informe esse IP no painel/FAQ). A plataforma recusa chaves com saque habilitado.
 - O worker usa dados públicos da Binance; se o servidor estiver em região bloqueada pela Binance, hospede em região permitida.
+- Preço em tempo real: o worker abre WebSocket de saída para `stream.binance.com:9443` (e `stream.testnet.binance.vision` para a testnet). Se o firewall bloquear, o motor cai para consulta de preço a cada `RISK_POLL_SECONDS` (2 s). Para desligar: `PRICE_FEED=false`.
+- Latência: quanto mais perto o servidor estiver da corretora, menor o tempo de ida e volta de cada ordem (para a Binance, quem busca menor latência costuma hospedar em Tóquio; para a B3, em São Paulo).
 
 ## Forex com cTrader
 
