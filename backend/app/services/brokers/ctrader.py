@@ -45,6 +45,7 @@ class PT:
     ACCOUNT_AUTH_REQ, ACCOUNT_AUTH_RES = 2102, 2103
     NEW_ORDER_REQ = 2106
     CLOSE_POSITION_REQ = 2111
+    ASSET_LIST_REQ, ASSET_LIST_RES = 2112, 2113
     SYMBOLS_LIST_REQ, SYMBOLS_LIST_RES = 2114, 2115
     SYMBOL_BY_ID_REQ, SYMBOL_BY_ID_RES = 2116, 2117
     TRADER_REQ, TRADER_RES = 2121, 2122
@@ -340,6 +341,24 @@ class CTraderBroker:
     async def trader(self) -> dict:
         res = await self._req(PT.TRADER_REQ, {})
         return res.get("trader", {})
+
+    async def account_summary(self) -> dict:
+        """Saldo, moeda de depósito e alavancagem da conta (só leitura, para a Carteira)."""
+        t = await self.trader()
+        currency = None
+        try:
+            res = await self._req(PT.ASSET_LIST_REQ, {})
+            names = {_i(a.get("assetId")): a.get("displayName") or a.get("name") for a in res.get("asset", [])}
+            currency = names.get(_i(t.get("depositAssetId")))
+        except BrokerError:
+            pass  # sem a lista de ativos, mostra o saldo sem a moeda
+        lev = _i(t.get("leverageInCents"))
+        return {
+            "balance": money_value(t.get("balance", 0), t.get("moneyDigits", 2)),
+            "currency": currency,
+            "leverage": lev / 100 if lev else None,
+            "broker": t.get("brokerName"),
+        }
 
     async def account_balance(self, symbol: str) -> Decimal:
         """Saldo da conta (na moeda de depósito da conta)."""

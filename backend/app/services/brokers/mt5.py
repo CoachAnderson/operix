@@ -126,6 +126,22 @@ class MT5Broker:
             return (bid + ask) / 2
         raise BrokerError(f"Sem cotação de {symbol} agora (mercado fechado?)", retryable=True)
 
+    async def account_summary(self) -> dict:
+        """Saldo, patrimônio e moeda da conta no MetaTrader 5 (só leitura, para a Carteira). Requer conector 1.1+."""
+        try:
+            data = await self._call("account", {})
+        except BrokerError as exc:
+            if "desconhecido" in str(exc):
+                raise BrokerError("Atualize o Conector OráculoInvest (versão 1.1 ou mais nova) para ver o saldo") from exc
+            raise
+        return {
+            "balance": D(data.get("balance") or 0),
+            "equity": D(data.get("equity") or data.get("balance") or 0),
+            "margin_free": D(data.get("margin_free") or 0),
+            "currency": data.get("currency"),
+            "leverage": data.get("leverage"),
+        }
+
     async def account_balance(self, symbol: str) -> Decimal:
         """Patrimônio da conta no MetaTrader 5 (saldo + resultado aberto). Requer conector 1.1+."""
         try:
