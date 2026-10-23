@@ -190,7 +190,7 @@ a.entry:hover { border-color: var(--muted); }
 .form-error { color: var(--loss); font-size: var(--step--1); margin-top: 8px; }
 
 /* ---------- Tabelas ---------- */
-.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--radius-m); background: var(--surface); }
+.table-wrap { position: relative;  overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--radius-m); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
 th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
 th { font-weight: 600; color: var(--muted); font-size: var(--step--1); }

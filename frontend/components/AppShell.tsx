@@ -71,6 +71,8 @@ export function AppShell({ area, children }: { area: "painel" | "admin"; childre
           { href: "/painel", label: "Robôs" },
           { href: "/painel/sinais", label: "Sinais", count: pending },
           { href: "/painel/backtest", label: "Backtest" },
+          { href: "/painel/mercados", label: "Mercados" },
+          { href: "/painel/carteira", label: "Carteira" },
           { href: "/painel/ordens", label: "Ordens" },
           { href: "/painel/relatorios", label: "Relatórios" },
           { href: "/painel/corretora", label: "Corretora" },

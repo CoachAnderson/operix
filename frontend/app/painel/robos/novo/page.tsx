@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StrategyParamsFields, cleanParams, defaultParams } from "@/components/StrategyParams";
 import { ErrorText, Loading, PageHead, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -91,6 +91,12 @@ export default function NewBotPage() {
     risk_pct: "1",
     max_leverage: "",
   });
+
+  // Par escolhido em Mercados (?simbolo=ETHUSDT)
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get("simbolo");
+    if (s && /^[A-Z0-9]{5,20}$/.test(s)) setForm((f) => ({ ...f, market: "crypto", symbol: s }));
+  }, []);
 
   const m = MARKETS[form.market];
   const forex = form.market === "forex";

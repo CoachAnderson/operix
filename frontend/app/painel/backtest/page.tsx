@@ -100,7 +100,9 @@ function hold(minutes: number): string {
 }
 
 function BacktestView() {
-  const botId = useSearchParams().get("robo");
+  const search = useSearchParams();
+  const botId = search.get("robo");
+  const presetSymbol = search.get("simbolo"); // vindo de Mercados
   const { data: strategies } = useApi<StrategyInfo[]>("/strategies");
   const action = useAction();
   const [result, setResult] = useState<Result | null>(null);
@@ -131,6 +133,10 @@ function BacktestView() {
   const [oos, setOos] = useState("30");
 
   // Pré-preenche com a configuração de um robô (?robo=ID)
+  useEffect(() => {
+    if (presetSymbol && /^[A-Z0-9]{5,20}$/.test(presetSymbol)) setForm((f) => ({ ...f, market: "crypto", symbol: presetSymbol }));
+  }, [presetSymbol]);
+
   useEffect(() => {
     if (!botId) return;
     api<BotSummary>(`/bots/${botId}`)
