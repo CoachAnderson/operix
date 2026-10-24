@@ -10,6 +10,7 @@ const TV_INTERVAL: Record<string, string> = { "1m": "1", "5m": "5", "15m": "15",
 
 const STUDIES: Record<string, string[]> = {
   rsi_reversion: ["STD;RSI"],
+  scalp_media: ["STD;Bollinger_Bands", "STD;RSI"],
 };
 
 /**

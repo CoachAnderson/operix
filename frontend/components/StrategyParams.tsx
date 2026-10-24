@@ -14,6 +14,10 @@ export const PARAM_LABELS: Record<string, string> = {
   exit_period: "Períodos para saída",
   max_hold_minutes: "Tempo máximo posicionado (min)",
   min_majority: "Candles na mesma direção, entre os 5 (3 a 5)",
+  bb_period: "Períodos da Banda de Bollinger",
+  bb_std: "Largura da banda (desvios-padrão)",
+  rsi_period: "Períodos do RSI",
+  rsi_level: "RSI para entrar (compra abaixo dele)",
 };
 export const TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 

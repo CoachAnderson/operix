@@ -202,6 +202,9 @@ export default function MarketsPage() {
                           <Link className="btn btn-quiet" style={{ paddingInline: 6 }} href={`/painel/backtest?simbolo=${r.symbol}`} aria-label={`Testar ${r.symbol} no backtest`}>
                             Testar
                           </Link>
+<Link className="btn btn-quiet" style={{ paddingInline: 6 }} href={`/painel/recomendar?simbolo=${r.symbol}`} aria-label={`Qual estratégia usar em ${r.symbol}`}>
+                            Qual usar?
+                          </Link>
                           <Link className="btn btn-quiet" style={{ paddingInline: 6 }} href={`/painel/robos/novo?simbolo=${r.symbol}`} aria-label={`Criar robô com ${r.symbol}`}>
                             Robô
                           </Link>

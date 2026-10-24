@@ -13,6 +13,7 @@ import type { BotFilters, BotSummary, Credential, Market, StrategyInfo } from "@
 import { FiltersFields, cleanFilters } from "@/components/FiltersFields";
 import { FilterCompare, SplitTable, type Segment } from "@/components/RobustnessView";
 import { StatsView, type Analysis } from "@/components/StatsView";
+import { MartingaleCompare, PeriodStats, type MartingaleSummary } from "@/components/PeriodStats";
 
 /** Custos padrão por mercado (taxa por lado em % e escorregamento em centésimos de %). */
 const MARKET_COSTS: Record<Market, { fee_pct: string; slippage_bps: string }> = {
@@ -45,6 +46,11 @@ interface Metrics {
   final_balance: number;
   long_trades: number;
   short_trades: number;
+  max_consecutive_wins?: number;
+  months_total?: number;
+  months_positive?: number;
+  months_negative?: number;
+  breakeven_win_rate_pct?: number | null;
 }
 interface Trade {
   side: "long" | "short";
@@ -79,6 +85,8 @@ interface Result {
   filtered_entries: number;
   filter_reasons: { reason: string; count: number }[];
   analysis?: Analysis;
+  martingale?: MartingaleSummary | Record<string, never>;
+  no_martingale?: { metrics: Metrics };
 }
 
 const PRESETS: [string, number][] = [
@@ -103,6 +111,8 @@ function BacktestView() {
   const search = useSearchParams();
   const botId = search.get("robo");
   const presetSymbol = search.get("simbolo"); // vindo de Mercados
+  const presetStrategy = search.get("estrategia"); // vindo de "Qual estratégia usar?"
+  const presetTf = search.get("tf");
   const { data: strategies } = useApi<StrategyInfo[]>("/strategies");
   const action = useAction();
   const [result, setResult] = useState<Result | null>(null);
@@ -127,6 +137,9 @@ function BacktestView() {
     slippage_bps: "5",
     risk_pct: "",
     max_leverage: "",
+    martingale: false,
+    martingale_mult: "2",
+    martingale_levels: "3",
   });
   const [botName, setBotName] = useState<string | null>(null);
   const [filters, setFilters] = useState<BotFilters>({});
@@ -168,9 +181,14 @@ function BacktestView() {
 
   useEffect(() => {
     if (strategies && !strategy) {
-      setStrategy(strategies[0].code);
-      setParams(defaultParams(strategies[0]));
+      const pick = strategies.find((x) => x.code === presetStrategy) ?? strategies[0];
+      setStrategy(pick.code);
+      const p = defaultParams(pick);
+      if (presetTf && pick.code === presetStrategy && /^(1m|5m|15m|30m|1h|4h|1d)$/.test(presetTf)) p.timeframe = presetTf;
+      setParams(p);
+      if (pick.code === presetStrategy) applyPreset(p.timeframe === "1m" ? 30 : p.timeframe === "5m" ? 90 : 182);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategies, strategy]);
 
   const selected = strategies?.find((s) => s.code === strategy);
@@ -225,6 +243,8 @@ function BacktestView() {
       oos_pct: Number(oos),
       risk_pct: form.risk_pct ? Number(form.risk_pct) : null,
       max_leverage: margin && form.max_leverage ? Number(form.max_leverage) : null,
+      martingale_mult: form.martingale ? Number(form.martingale_mult) : null,
+      martingale_levels: Number(form.martingale_levels),
     };
     const res = await action.run(() => api<Result>("/backtest", { json: body }));
     if (res) setResult(res);
@@ -237,7 +257,9 @@ function BacktestView() {
       <PageHead
         title="Backtest"
         lead={botName ? `Testando a configuração do robô ${botName} no histórico.` : "Teste uma estratégia no histórico (Binance, cTrader ou MetaTrader 5) antes de ligar um robô."}
-      />
+      >
+        <Link className="btn" href="/painel/recomendar">Qual estratégia usar?</Link>
+      </PageHead>
       <div className="bt-layout">
         <form className="form panel" onSubmit={run}>
           <div className="presets" role="group" aria-label="Mercado">
@@ -422,6 +444,43 @@ function BacktestView() {
               </label>
             </div>
           </details>
+          <details>
+            <summary>Martingale (simulação)</summary>
+            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+              <label className="check">
+                <input type="checkbox" checked={form.martingale} onChange={(e) => setForm({ ...form, martingale: e.target.checked })} />
+                Simular martingale: aumentar a entrada depois de cada perda
+              </label>
+              {form.martingale && (
+                <div className="grid-2">
+                  <label>
+                    Multiplicar por
+                    <select value={form.martingale_mult} onChange={set("martingale_mult")}>
+                      {["1.5", "2", "2.5", "3"].map((v) => (
+                        <option key={v} value={v}>
+                          {v.replace(".", ",")}×
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Até quantas vezes seguidas
+                    <select value={form.martingale_levels} onChange={set("martingale_levels")}>
+                      {["1", "2", "3", "4", "5", "6"].map((v) => (
+                        <option key={v} value={v}>
+                          {v} (maior entrada {money(Number(form.martingale_mult) ** Number(v), 1)}×)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+              <p className="muted small">
+                Só no backtest: o resultado aparece lado a lado com e sem martingale. Depois de perder todas as dobras, o ciclo fecha com o prejuízo e volta
+                ao tamanho normal.
+              </p>
+            </div>
+          </details>
           <ErrorText>{action.error}</ErrorText>
           <button className="btn btn-primary" disabled={action.busy || !strategy}>
             {action.busy ? "Baixando histórico e simulando…" : "Rodar backtest"}
@@ -486,6 +545,10 @@ function ResultView({ r }: { r: Result }) {
         )}
       </p>
 
+      {m.trades > 0 && <PeriodStats m={m} pre={pre} />}
+      {r.martingale && "multiplier" in r.martingale && r.no_martingale && (
+        <MartingaleCompare withMg={m} without={r.no_martingale.metrics} mg={r.martingale as MartingaleSummary} pre={pre} />
+      )}
       {r.analysis && r.analysis.trades > 0 && <StatsView a={r.analysis} pre={pre} />}
 
       {r.segments?.length === 2 && <SplitTable segments={r.segments} />}

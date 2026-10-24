@@ -92,11 +92,21 @@ export default function NewBotPage() {
     max_leverage: "",
   });
 
-  // Par escolhido em Mercados (?simbolo=ETHUSDT)
+  // Par escolhido em Mercados (?simbolo=ETHUSDT) e estratégia indicada em "Qual estratégia usar?" (&estrategia=…&tf=…)
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get("simbolo");
     if (s && /^[A-Z0-9]{5,20}$/.test(s)) setForm((f) => ({ ...f, market: "crypto", symbol: s }));
   }, []);
+  useEffect(() => {
+    if (!strategies || strategy) return;
+    const q = new URLSearchParams(window.location.search);
+    const pick = strategies.find((x) => x.code === q.get("estrategia"));
+    if (!pick) return;
+    chooseStrategy(pick);
+    const tf = q.get("tf");
+    if (tf && /^(1m|5m|15m|30m|1h|4h|1d)$/.test(tf)) setParams((p) => ({ ...defaultParams(pick), ...p, timeframe: tf }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategies]);
 
   const m = MARKETS[form.market];
   const forex = form.market === "forex";
