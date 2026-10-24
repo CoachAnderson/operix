@@ -9,17 +9,20 @@ import asyncio
 import contextlib
 import logging
 import signal
+import time
 import uuid
 from decimal import Decimal
 
 from app.core.config import get_settings
 from app.core.redis import get_redis
 from app.db import SessionLocal
+from app.engine import journal
 from app.engine.pricefeed import BinanceFeed
 from app.engine.runner import expire_signals, mark_error, run_risk_tick, run_tick
 from app.engine.scheduler import Scheduler, load_state
 from app.models import Bot, BotStatus
 from app.services.brokers.base import BrokerError
+from app.services.brokers.binance import BinanceClient
 
 log = logging.getLogger("worker")
 MAX_CONCURRENCY = 20
@@ -44,11 +47,15 @@ async def run_bot(bot_id: uuid.UUID, kind: str, price: Decimal | None = None) ->
                 result = await (run_tick(db, bot) if kind == "decision" else run_risk_tick(db, bot, price=price))
                 if result.action not in ("hold", "skipped"):
                     log.info("robô=%s %s %s %s", bot_id, kind, result.action, result.detail)
+                # Diário para o painel "Por que não entrou?": toda decisão de candle; do risco, só o que agiu.
+                if kind == "decision" or result.action not in ("hold", "skipped"):
+                    await journal.record(bot_id, kind, result.action, result.detail)
             except Exception as exc:  # noqa: BLE001
                 if isinstance(exc, BrokerError) and exc.retryable:
                     log.warning("robô=%s %s: %s (tenta de novo)", bot_id, kind, exc)
                 else:
                     log.error("Falha no robô %s (%s): %s", bot_id, kind, exc, exc_info=not isinstance(exc, BrokerError))
+                await journal.record(bot_id, kind, "error", str(exc) or type(exc).__name__)
                 await db.rollback()
                 bot = await db.get(Bot, bot_id, populate_existing=True)  # recarrega depois do rollback
                 if bot is not None:
@@ -68,6 +75,28 @@ async def _expire_loop(stop: asyncio.Event) -> None:
             await asyncio.wait_for(stop.wait(), timeout=30)
 
 
+async def _heartbeat_loop(stop: asyncio.Event, scheduler: Scheduler, started: float) -> None:
+    """Sinal de vida a cada 15 s e, a cada 10 min, a diferença do relógio do servidor para o da Binance."""
+    clock: dict = {"offset_ms": None, "checked_at": None}
+    last_clock = 0.0
+    while not stop.is_set():
+        if time.time() - last_clock > 600:
+            last_clock = time.time()
+            client = BinanceClient("live")
+            try:
+                await asyncio.wait_for(client.sync_time(), 10)
+                clock = {"offset_ms": client._time_offset_ms, "checked_at": time.time()}
+            except Exception:  # noqa: BLE001 - sem internet para a Binance: só não mede o relógio
+                pass
+            finally:
+                await client.close()
+        feeds = {name: f.connected.is_set() for name, f in scheduler.feeds.items()}
+        await journal.beat({"started_at": started, "bots": len(scheduler.watches), "running": len(scheduler.running),
+                            "last_error": scheduler.last_error, "clock_offset_ms": clock["offset_ms"], "feeds": feeds})
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=15)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     s = get_settings()
@@ -80,7 +109,7 @@ async def main() -> None:
             pass
 
     scheduler = Scheduler(run_bot)
-    tasks = [asyncio.create_task(_expire_loop(stop))]
+    tasks = [asyncio.create_task(_expire_loop(stop)), asyncio.create_task(_heartbeat_loop(stop, scheduler, time.time()))]
     if s.price_feed:
         scheduler.feeds = {
             "live": BinanceFeed("live", s.binance_ws_live, scheduler.on_price),

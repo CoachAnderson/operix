@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -12,7 +14,8 @@ from app.api.deps import DB, ActivePlan, CurrentUser, active_subscription
 from app.core.ratelimit import client_ip, hit
 from app.engine import executor
 from app.engine.guards import permission_problem
-from app.engine.risk import daily_stats
+from app.engine import journal
+from app.engine.risk import daily_stats, kill_switch_state
 from app.engine.sizing import SizingBlocked
 from app.models import (
     Bot,
@@ -32,9 +35,11 @@ from app.schemas import BotIn, BotOut, BotSummary, BotUpdate, OrderOut, Position
 from app.services.audit import audit
 from app.services.brokers.base import BrokerError
 from app.services.brokers.factory import broker_for_bot
-from app.strategies.filters import STRATEGY_FAMILY, BotFilters
+from app.strategies import filters as flt
+from app.strategies.filters import STRATEGY_FAMILY, TF_MS, BotFilters
 from app.strategies.library import STRATEGIES, get_strategy
 
+TZ_BR = ZoneInfo("America/Sao_Paulo")
 router = APIRouter(tags=["robôs"])
 
 
@@ -428,6 +433,129 @@ async def bot_chart(bot_id: uuid.UUID, user: CurrentUser, db: DB, limit: int = Q
             for x in signals
         ],
         "position": position,
+    }
+
+
+# ---------------- Diagnóstico ----------------
+STATUS_TEXT = {
+    BotStatus.paused_billing: "Pausado pela assinatura",
+    BotStatus.paused_risk: "Pausado pelo limite de perda do dia",
+    BotStatus.error: "Parado por erro",
+    BotStatus.stopped: "Parado",
+}
+
+
+@router.get("/bots/{bot_id}/diagnostics")
+async def bot_diagnostics(bot_id: uuid.UUID, user: CurrentUser, db: DB) -> dict:
+    """Por que o robô entrou ou não entrou: confere as causas comuns e devolve o diário das últimas decisões."""
+    await hit(f"diag:{user.id}", 30, 60)
+    bot = await _get_bot(db, user, bot_id)
+    now = datetime.now(UTC)
+    checks: list[dict] = []
+
+    def add(level: str, title: str, detail: str = "") -> None:
+        checks.append({"level": level, "title": title, "detail": detail})
+
+    # 1) O motor (worker) está rodando?
+    ws = await journal.worker_state()
+    if not ws or time.time() - ws.get("at", 0) > 90:
+        add("fail", "O motor de robôs (worker) não está rodando",
+            "Sem sinal de vida do worker. No servidor, confira com `docker compose ps` e veja o erro com `docker compose logs --tail=100 worker`.")
+    elif ws.get("last_error"):
+        add("fail", "O motor não consegue ler os robôs do banco",
+            f"Erro: {ws['last_error']}. Depois de atualizar o sistema, rode a atualização com o arquivo de produção "
+            "(docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build) para aplicar as migrações do banco.")
+    else:
+        add("ok", "Motor de robôs rodando", f"Vigiando {ws.get('bots', 0)} robô(s).")
+    off = (ws or {}).get("clock_offset_ms")
+    if off is not None and abs(off) > 2000:
+        add("warn", f"Relógio do servidor {abs(off) / 1000:.1f} s diferente do da Binance",
+            "Ative a sincronização de horário (NTP) no servidor. Em estratégias de 1 minuto isso atrasa ou descarta entradas.")
+
+    # 2) Situação, assinatura e permissões
+    sub = await active_subscription(db, user.id)
+    problem = permission_problem(user, sub.plan if sub else None, bot)
+    if bot.status == BotStatus.running:
+        add("ok", "Robô ligado")
+    else:
+        reason = bot.status_reason or ""
+        hint = "Depois de resolver, ligue o robô de novo." if bot.status != BotStatus.stopped else "Ligue o robô no botão Ligar."
+        add("fail", STATUS_TEXT.get(bot.status, bot.status.value), f"{reason}. {hint}" if reason else hint)
+    if problem and problem.message != bot.status_reason:
+        add("fail", "Falta algo para o robô poder operar", problem.message)
+    ks = await kill_switch_state(db)
+    if ks.get("enabled"):
+        add("fail", "Todos os robôs estão pausados pela administração", ks.get("reason") or "")
+
+    # 3) Modo de execução
+    if bot.exec_mode == ExecMode.signals:
+        pending = await db.scalar(select(func.count(Signal.id)).where(Signal.bot_id == bot.id, Signal.status == SignalStatus.pending))
+        add("warn", "Modo sinais: o robô não entra sozinho",
+            f"Cada entrada vira um aviso na tela Sinais e só é executada quando você confirma. Sinais pendentes agora: {pending or 0}. "
+            "Para entrar sozinho, mude o modo para Automático (plano com execução automática).")
+    else:
+        add("ok", "Modo automático", "As entradas são enviadas sozinhas.")
+
+    # 4) Avaliações recentes
+    strategy = get_strategy(bot.strategy)
+    tf = strategy.parse_params(bot.params).timeframe
+    step = TF_MS[tf] / 1000
+    if bot.last_tick_at is None:
+        add("warn", "O robô ainda não foi avaliado pelo motor", "Se o motor estiver rodando, a primeira avaliação acontece em até 1 minuto.")
+    else:
+        last = bot.last_tick_at if bot.last_tick_at.tzinfo else bot.last_tick_at.replace(tzinfo=UTC)
+        age = (now - last).total_seconds()
+        if bot.status != BotStatus.running:
+            pass  # parado: o motor não avalia, e isso já aparece acima
+        elif age > step + 120:
+            ago = f"{int(age // 86400)} dia(s)" if age >= 86400 else f"{int(age // 3600)} h" if age >= 3600 else f"{int(age // 60)} min"
+            add("warn", f"Última avaliação há {ago}", f"O esperado é a cada candle de {tf}. Confira se o motor está rodando.")
+        else:
+            add("ok", "Avaliando a cada candle", f"Tempo gráfico {tf}; última avaliação às {last.astimezone(TZ_BR):%H:%M:%S}.")
+
+    # 5) Limites do dia
+    stats = await daily_stats(db, bot.id, now)
+    if stats.trades >= bot.max_trades_per_day:
+        add("fail", "Limite de operações do dia atingido",
+            f"{stats.trades} de {bot.max_trades_per_day} (entrada e saída contam separadas). Aumente o limite em Ajustar ou espere o dia virar (meia-noite UTC).")
+    elif bot.max_daily_loss_quote and stats.realized_pnl <= -bot.max_daily_loss_quote:
+        add("fail", "Perda máxima do dia atingida", f"Resultado de hoje: {stats.realized_pnl:.2f}.")
+    else:
+        add("ok", "Limites do dia livres", f"{stats.trades} de {bot.max_trades_per_day} operações hoje.")
+
+    # 6) Filtros de entrada
+    entries = await journal.read(bot.id, 50)
+    f = flt.parse(bot.filters)
+    if f.any_entry_filter:
+        barred = sum(1 for e in entries if "Entrada filtrada" in (e.get("detail") or ""))
+        add("warn" if barred else "info", "Filtros de entrada ligados",
+            f"Eles barram entradas fora das condições escolhidas. Nas últimas {len(entries)} avaliações, {barred} entrada(s) foram barradas por filtro.")
+
+    # 7) Venda a descoberto na Binance à vista
+    if bot.market == Market.crypto:
+        add("info", "Binance à vista: só entra comprado",
+            "Sinais de venda sem posição aberta são ignorados (não existe venda a descoberto no mercado à vista).")
+
+    # 8) Tamanho da próxima entrada (saldo, mínimo da corretora, conexão)
+    preview = await _preview(db, bot)
+    if preview.get("ok"):
+        add("ok", "Saldo e tamanho da ordem conferidos", "A próxima entrada passa no saldo e no mínimo da corretora.")
+    else:
+        add("fail", "A próxima entrada seria recusada", preview.get("message") or "")
+
+    # Resumo do diário
+    counts: dict[str, int] = {}
+    for e in entries:
+        counts[e.get("action", "")] = counts.get(e.get("action", ""), 0) + 1
+    next_close = (int(now.timestamp() // step) + 1) * step
+    return {
+        "checks": checks,
+        "journal": entries,
+        "counts": counts,
+        "timeframe": tf,
+        "strategy": strategy.name,
+        "next_decision_at": int((next_close + 1.2) * 1000),
+        "worker": ws,
     }
 
 

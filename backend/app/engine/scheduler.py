@@ -71,6 +71,7 @@ class Scheduler:
         self.feeds: dict = {}  # nome -> BinanceFeed
         self.triggered: dict[uuid.UUID, Decimal] = {}  # preço que disparou a saída
         self._reload = True
+        self.last_error: str | None = None  # erro ao ler os robôs do banco (ex.: migração não aplicada)
 
     # ------------------------------------------------------------ estado
     @staticmethod
@@ -202,8 +203,11 @@ class Scheduler:
                 try:
                     bots, positions = await load_state()
                     self.load(bots, positions)
-                except Exception:  # noqa: BLE001 - banco fora do ar: tenta de novo no próximo giro
-                    log.exception("Falha ao carregar robôs")
+                    self.last_error = None
+                except Exception as exc:  # noqa: BLE001 - banco fora do ar: tenta de novo no próximo giro
+                    if self.last_error is None:
+                        log.exception("Falha ao carregar robôs")
+                    self.last_error = f"{type(exc).__name__}: {str(exc).splitlines()[0][:240] if str(exc) else ''}"
                 last_refresh = self.clock()
                 self.dispatch()
             with contextlib.suppress(TimeoutError):

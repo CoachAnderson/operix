@@ -11,4 +11,5 @@ USER app
 
 EXPOSE 8000
 # O worker usa a mesma imagem com outro comando (ver docker-compose.yml)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Em produção, aplica as migrações do banco antes de subir (mesmo sem o docker-compose.prod.yml).
+CMD ["sh", "-c", "if [ \"$ENVIRONMENT\" = production ]; then alembic upgrade head; fi && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'"]

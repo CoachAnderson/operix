@@ -41,6 +41,8 @@ class MemoryRedis:
         return val
 
     async def expire(self, key: str, seconds: int) -> bool:
+        if key in self._lists:
+            return True  # listas em memória não expiram (só testes e desenvolvimento)
         if self._alive(key):
             self._data[key] = (self._data[key][0], time.monotonic() + seconds)
             return True
@@ -54,6 +56,22 @@ class MemoryRedis:
         lst = self._lists.setdefault(key, [])
         lst.extend(str(v) for v in values)
         return len(lst)
+
+    async def lpush(self, key: str, *values: str) -> int:
+        lst = self._lists.setdefault(key, [])
+        for v in values:
+            lst.insert(0, str(v))
+        return len(lst)
+
+    async def ltrim(self, key: str, start: int, end: int) -> bool:
+        lst = self._lists.get(key)
+        if lst is not None:
+            self._lists[key] = lst[start : (None if end == -1 else end + 1)]
+        return True
+
+    async def lrange(self, key: str, start: int, end: int) -> list[str]:
+        lst = self._lists.get(key, [])
+        return lst[start : (None if end == -1 else end + 1)]
 
     async def lpop(self, key: str) -> str | None:
         lst = self._lists.get(key)
