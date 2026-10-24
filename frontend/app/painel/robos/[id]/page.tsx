@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { OrdersTable } from "@/components/OrdersTable";
 import { TradingViewWidget } from "@/components/TradingViewWidget";
 import { BotChart } from "@/components/BotChart";
+import { BotDiagnostics } from "@/components/BotDiagnostics";
 import { ErrorText, Loading, StatusTag, Stripe, VenueTag, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
 import { B3_POINT_VALUE, MODE_LABEL, dateTime, money, pnlClass, price, qty, signed, venueLabel } from "@/lib/format";
@@ -190,6 +191,10 @@ export default function BotDetailPage() {
             <TradingViewWidget heading={heading} symbol={b.symbol} market={b.market} timeframe={String(b.params.timeframe ?? "1h")} strategy={b.strategy} />
           );
         })()}
+      </section>
+
+      <section className="section">
+        <BotDiagnostics botId={b.id} />
       </section>
 
       <section className="section">

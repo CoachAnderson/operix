@@ -84,7 +84,10 @@ cd /opt/operix
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-As migrações do banco (`backend/migrations/versions`) são aplicadas sozinhas quando a API reinicia.
+As migrações do banco (`backend/migrations/versions`) são aplicadas sozinhas quando a API reinicia com `ENVIRONMENT=production`
+(confira no `.env`). Se o robô parar de operar depois de uma atualização, abra a página dele: o painel "Por que entrou ou não entrou?"
+mostra se o motor (worker) está rodando e se conseguiu ler os robôs do banco. Para ver o erro direto no servidor:
+`docker compose logs --tail=100 worker`.
 Quando você mudar tabelas no código, gere a migração **no seu computador**, revise o arquivo e envie junto com a versão:
 ```bash
 cd backend
