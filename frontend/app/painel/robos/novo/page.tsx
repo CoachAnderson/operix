@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { StrategyParamsFields, cleanParams, defaultParams } from "@/components/StrategyParams";
 import { ErrorText, Loading, PageHead, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -97,16 +97,49 @@ export default function NewBotPage() {
     const s = new URLSearchParams(window.location.search).get("simbolo");
     if (s && /^[A-Z0-9]{5,20}$/.test(s)) setForm((f) => ({ ...f, market: "crypto", symbol: s }));
   }, []);
+  const [fromTest, setFromTest] = useState<string | null>(null);
+  const startAfter = useRef(false);
   useEffect(() => {
-    if (!strategies || strategy) return;
+    if (!strategies || strategy || subLoading) return;
     const q = new URLSearchParams(window.location.search);
     const pick = strategies.find((x) => x.code === q.get("estrategia"));
     if (!pick) return;
     chooseStrategy(pick);
     const tf = q.get("tf");
-    if (tf && /^(1m|5m|15m|30m|1h|4h|1d)$/.test(tf)) setParams((p) => ({ ...defaultParams(pick), ...p, timeframe: tf }));
+    const okTf = tf && /^(1m|5m|15m|30m|1h|4h|1d)$/.test(tf) ? tf : null;
+    if (okTf) setParams((p) => ({ ...defaultParams(pick), ...p, timeframe: okTf }));
+    if (q.get("de") !== "recomendacao") return;
+    // Vindo de "Qual estratégia usar?": a mesma configuração que foi testada, pronta para criar na simulação.
+    const num = (k: string, def: string) => {
+      const v = q.get(k);
+      return v && /^\d+(\.\d+)?$/.test(v) ? v : def;
+    };
+    const qs = q.get("simbolo");
+    const symbol = qs && /^[A-Z0-9]{5,20}$/.test(qs) ? qs : form.symbol;
+    const allowAuto = sub?.status === "active" && sub.plan.allow_auto;
+    setForm((f) => ({
+      ...f,
+      market: "crypto",
+      venue: "paper",
+      credential_id: "",
+      allow_short: false,
+      exec_mode: allowAuto ? "auto" : "signals",
+      sizing_mode: "fixed",
+      order_size_quote: num("valor", "100"),
+      paper_quote_balance: num("saldo", "1000"),
+      stop_loss_pct: num("stop", "2"),
+      take_profit_pct: num("alvo", "4"),
+      max_trades_per_day: String(pick.suggested_max_trades_per_day ?? 20),
+      symbol,
+      name: `${pick.name} · ${symbol}${okTf ? ` ${okTf}` : ""}`.slice(0, 80),
+    }));
+    const quote = ["USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH"].find((x) => symbol.endsWith(x)) ?? "";
+    setFromTest(
+      `${pick.name}${okTf ? ` em ${okTf}` : ""} no ${symbol}, simulação com saldo fictício de ${num("saldo", "1000")} ${quote}, ${num("valor", "100")} ${quote} por ordem, stop de ${num("stop", "2")}% e alvo de ${num("alvo", "4")}%` +
+        (allowAuto ? ", modo automático." : ". Seu plano não inclui o modo automático, então o robô começa no modo sinais."),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategies]);
+  }, [strategies, subLoading]);
 
   const m = MARKETS[form.market];
   const forex = form.market === "forex";
@@ -179,6 +212,10 @@ export default function NewBotPage() {
     e.preventDefault();
     const body = buildBody();
     const bot = await run(() => api<Bot>("/bots", { json: body }));
+    if (bot && startAfter.current && body.venue === "paper") {
+      // "Criar e ligar na simulação": já deixa rodando (só na simulação; conta real sempre pede confirmação na página do robô)
+      await api(`/bots/${bot.id}/start`, { method: "POST" }).catch(() => {});
+    }
     if (bot) router.push(`/painel/robos/${bot.id}`);
   }
 
@@ -194,7 +231,22 @@ export default function NewBotPage() {
   return (
     <>
       <PageHead title="Criar robô" lead="Escolha o mercado, a estratégia, onde ele vai operar e os limites de risco." />
-      <form className="form" onSubmit={submit} style={{ maxWidth: 720 }}>
+      {fromTest && (
+        <div className="rb-verdict gain" style={{ maxWidth: 720, display: "grid", gap: 10, marginBottom: 16 }}>
+          <strong>Robô já configurado com o teste que funcionou</strong>
+          <span>{fromTest} É a mesma configuração usada na análise. Confira abaixo se quiser ajustar algo.</span>
+          <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-primary" type="submit" form="novo-robo" disabled={busy} onClick={() => (startAfter.current = true)}>
+              {busy ? "Criando…" : "Criar e ligar na simulação"}
+            </button>
+            <button className="btn" type="submit" form="novo-robo" disabled={busy} onClick={() => (startAfter.current = false)}>
+              Só criar
+            </button>
+          </span>
+          {error && <span className="loss">{error}</span>}
+        </div>
+      )}
+      <form id="novo-robo" className="form" onSubmit={submit} style={{ maxWidth: 720 }}>
         <fieldset>
           <legend>Mercado</legend>
           <div className="choice">

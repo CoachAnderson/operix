@@ -45,6 +45,7 @@ interface Job {
   error?: string;
   oos_pct?: number;
   finished_at?: number;
+  config?: { initial_balance: number; order_size_quote: number; stop_loss_pct: number; take_profit_pct: number };
 }
 
 const VERDICT: Record<Row["verdict"], { label: string; tone: string; hint: string }> = {
@@ -101,6 +102,9 @@ export default function RecommendPage() {
   const running = job?.status === "running";
   const best = job?.status === "done" ? job.results.find((r) => r.verdict === "approved") : undefined;
   const link = (r: Row, base: string) => `${base}?simbolo=${job?.symbol}&estrategia=${r.strategy}&tf=${r.timeframe}`;
+  const cfg = job?.config;
+  const robotLink = (r: Row) =>
+    `${link(r, "/painel/robos/novo")}&de=recomendacao&stop=${cfg?.stop_loss_pct ?? 2}&alvo=${cfg?.take_profit_pct ?? 4}&valor=${cfg?.order_size_quote ?? 100}&saldo=${cfg?.initial_balance ?? 1000}`;
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -163,7 +167,7 @@ export default function RecommendPage() {
                 </span>
                 <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <Link className="btn" href={link(best, "/painel/backtest")}>Ver no backtest</Link>
-                  <Link className="btn btn-primary" href={link(best, "/painel/robos/novo")}>Criar robô com esta (comece na simulação)</Link>
+                  <Link className="btn btn-primary" href={robotLink(best)}>Criar robô com esta (comece na simulação)</Link>
                 </span>
               </>
             ) : (
@@ -227,6 +231,11 @@ export default function RecommendPage() {
                       {r.verdict !== "error" && (
                         <Link className="btn btn-quiet" style={{ paddingInline: 6 }} href={link(r, "/painel/backtest")}>
                           Testar
+                        </Link>
+                      )}
+                      {(r.verdict === "approved" || r.verdict === "marginal") && (
+                        <Link className="btn btn-quiet" style={{ paddingInline: 6 }} href={robotLink(r)}>
+                          Robô
                         </Link>
                       )}
                     </td>
