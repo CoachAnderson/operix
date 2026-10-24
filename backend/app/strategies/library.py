@@ -12,7 +12,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from app.services.brokers.base import Candle
 from app.strategies.base import Decision, Strategy, StrategyParams, Target, Timeframe
-from app.strategies.indicators import crossed_above, crossed_below, ema, highest, lowest, rsi
+from app.strategies.indicators import bollinger, crossed_above, crossed_below, ema, highest, lowest, rsi
 
 
 # ---------------------------------------------------------------- Cruzamento de médias
@@ -144,6 +144,60 @@ class DonchianBreakout(Strategy):
         return Decision.hold()
 
 
+# ---------------------------------------------------------------- Scalp: reversão à média
+class ScalpMedia(Strategy):
+    """Scalp de reversão à média: entra quando o preço fecha fora da Banda de Bollinger com o RSI curto esticado,
+    a favor da tendência maior, e sai quando o preço volta à média. Alvo curto (alto acerto) e stop pela
+    configuração do robô (percentual ou ATR): o acerto alto só vale se o ganho médio pagar as perdas."""
+
+    code = "scalp_media"
+    name = "Scalp: volta à média"
+    style = "day"
+    description = (
+        "Compra quando o preço fecha abaixo da Banda de Bollinger com o RSI curto em sobrevenda, a favor da tendência, "
+        "e sai quando ele volta à média das bandas. Alvo curto e muitas operações; use sempre stop."
+    )
+    default_max_hold_minutes = 120
+    suggested_max_trades_per_day = 60
+    notes = (
+        "Estratégia de alvo curto: tende a acertar muito, mas cada perda costuma ser maior que cada ganho. Olhe no backtest o 'acerto necessário para empatar'.",
+        "Use sempre stop (percentual ou pelo ATR, em Filtros). Sem stop, uma tendência forte contra a entrada pode gerar uma perda grande.",
+        "Na Binance à vista só faz as compras; as vendas exigem forex ou B3 com 'operar vendido'.",
+        "Em cripto, a taxa de 0,1% por lado pesa muito em alvos curtos: teste com os custos reais.",
+    )
+
+    class Params(StrategyParams):
+        timeframe: Timeframe = "5m"
+        bb_period: int = Field(20, ge=5, le=100, description="Períodos da Banda de Bollinger")
+        bb_std: float = Field(2.0, ge=1.0, le=4.0, description="Desvios-padrão da banda")
+        rsi_period: int = Field(7, ge=2, le=30)
+        rsi_level: float = Field(25, ge=5, le=45, description="RSI abaixo deste nível para comprar (acima de 100 menos ele para vender)")
+        trend_ema: int = Field(200, ge=0, le=400, description="0 desliga o filtro de tendência")
+
+    def required_candles(self, params) -> int:  # type: ignore[override]
+        return max(params.bb_period + 2, params.rsi_period * 5, params.trend_ema + 2, 50)
+
+    def decide(self, candles: list[Candle], position: Target, params, allow_short: bool = False) -> Decision:  # type: ignore[override]
+        closes = [c.close for c in candles]
+        mid, upper, lower = bollinger(closes, params.bb_period, params.bb_std)
+        r = rsi(closes, params.rsi_period)[-1]
+        if math.isnan(mid) or math.isnan(r):
+            return Decision.hold("Histórico insuficiente")
+        close = closes[-1]
+        if position == "long":
+            return Decision("flat", f"Voltou à média ({mid:.6g})") if close >= mid else Decision.hold()
+        if position == "short":
+            return Decision("flat", f"Voltou à média ({mid:.6g})") if close <= mid else Decision.hold()
+        trend = ema(closes, params.trend_ema)[-1] if params.trend_ema else math.nan
+        up = not params.trend_ema or (not math.isnan(trend) and close > trend)
+        down = not params.trend_ema or (not math.isnan(trend) and close < trend)
+        if close < lower and r < params.rsi_level and up:
+            return Decision("long", f"Fechou abaixo da banda ({lower:.6g}) com RSI {r:.0f}", "compra")
+        if allow_short and close > upper and r > 100 - params.rsi_level and down:
+            return Decision("short", f"Fechou acima da banda ({upper:.6g}) com RSI {r:.0f}", "venda")
+        return Decision.hold()
+
+
 # ---------------------------------------------------------------- Reversão AMS (1 minuto)
 AMS_WINDOW = 5
 
@@ -198,7 +252,7 @@ class ReversaoAMS(Strategy):
         return Decision("flat", f"Reversão AMS: sem maioria de {params.min_majority} em 5 ({seq})")
 
 
-STRATEGIES: dict[str, Strategy] = {s.code: s() for s in (EmaCrossDay, EmaCrossSwing, RsiReversion, DonchianBreakout, ReversaoAMS)}
+STRATEGIES: dict[str, Strategy] = {s.code: s() for s in (EmaCrossDay, EmaCrossSwing, RsiReversion, DonchianBreakout, ScalpMedia, ReversaoAMS)}
 
 
 def get_strategy(code: str) -> Strategy:

@@ -122,3 +122,13 @@ def adx(highs: list[float], lows: list[float], closes: list[float], period: int 
         elif len(dx) > period:
             out[i] = (out[i - 1] * (period - 1) + dx[-1]) / period
     return out
+
+
+def bollinger(values: list[float], period: int = 20, num_std: float = 2.0) -> tuple[float, float, float]:
+    """Bandas de Bollinger do ÚLTIMO valor: (média, banda superior, banda inferior). NaN se faltar histórico."""
+    if period <= 1 or len(values) < period:
+        return math.nan, math.nan, math.nan
+    window = values[-period:]
+    mid = sum(window) / period
+    sd = math.sqrt(sum((v - mid) ** 2 for v in window) / period)
+    return mid, mid + num_std * sd, mid - num_std * sd

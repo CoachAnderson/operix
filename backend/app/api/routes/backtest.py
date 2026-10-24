@@ -5,7 +5,7 @@ import uuid
 from collections import OrderedDict
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -16,7 +16,7 @@ from app.engine.backtest import BacktestConfig, filter_warmup, run_backtest
 from app.models import Bot, ExchangeCredential, Market
 from app.services.brokers.base import BrokerError, Candle
 from app.services.brokers.binance import BinanceClient
-from app.services import b3
+from app.services import b3, recommender
 from app.services.brokers.factory import ctrader_broker
 from app.services.brokers.mt5 import MT5Broker
 from app.strategies.filters import STRATEGY_FAMILY, BotFilters
@@ -54,6 +54,9 @@ class BacktestIn(BaseModel):
     oos_pct: int = Field(30, ge=0, le=50)
     risk_pct: float | None = Field(None, gt=0, le=10)
     max_leverage: float | None = Field(None, gt=0, le=500)
+    # Martingale (simulação): multiplicador após cada perda e número máximo de multiplicações seguidas.
+    martingale_mult: float | None = Field(None, ge=1.1, le=3)
+    martingale_levels: int = Field(3, ge=1, le=6)
 
     @model_validator(mode="after")
     def check_dates(self) -> BacktestIn:
@@ -196,6 +199,8 @@ async def execute(body: BacktestIn, db=None, user=None) -> dict:
         max_trades_per_day=body.max_trades_per_day or (3000 if strategy.trade_bars else 50),
         fee_rate=body.fee_rate,
         slippage_bps=body.slippage_bps,
+        martingale_mult=body.martingale_mult,
+        martingale_levels=body.martingale_levels,
     )
     try:
         # CPU: roda fora do loop de eventos para não travar a API.
@@ -205,6 +210,10 @@ async def execute(body: BacktestIn, db=None, user=None) -> dict:
         if cfg.filters is not None:
             plain = BacktestConfig(**{**cfg.__dict__, "filters": None})
             baseline = await asyncio.to_thread(run_backtest, strategy, params, candles, plain)
+        # Martingale: a mesma configuração sem multiplicar, para comparar lado a lado.
+        no_mg = None
+        if cfg.martingale_mult:
+            no_mg = await asyncio.to_thread(run_backtest, strategy, params, candles, BacktestConfig(**{**cfg.__dict__, "martingale_mult": None}))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -212,6 +221,9 @@ async def execute(body: BacktestIn, db=None, user=None) -> dict:
     if baseline is not None:
         b = baseline.to_dict()
         out["baseline"] = {"metrics": b["metrics"], "segments": b["segments"]}
+    if no_mg is not None:
+        nm = no_mg.to_dict()
+        out["no_martingale"] = {"metrics": nm["metrics"], "equity": nm["equity"]}
     out["trades"] = out["trades"][-500:]  # as mais recentes; as métricas usam todas
     # Candles para o gráfico (TradingView Lightweight Charts). Limite para manter a resposta leve.
     out["ohlc"] = [[t, *(float(f"{v:.8g}") for v in ohlc)] for t, *ohlc in out["ohlc"][-MAX_CHART_CANDLES:]]
@@ -265,3 +277,25 @@ async def backtest_bot(bot_id: uuid.UUID, body: BotBacktestIn, user: CurrentUser
         db,
         user,
     )
+
+
+# ---------------- Qual estratégia usar? ----------------
+class RecommendIn(BaseModel):
+    symbol: str = Field(pattern=r"^[A-Z0-9]{5,20}$")
+    days: Literal[30, 90, 180, 365] = 180
+
+
+@router.post("/recommend")
+async def recommend(body: RecommendIn, user: CurrentUser, _: ActivePlan) -> dict:
+    """Começa a análise em segundo plano; acompanhe em GET /backtest/recommend/{id}."""
+    await hit(f"recommend:{user.id}", limit=10, window_seconds=3600)
+    job = await recommender.start(body.symbol, body.days, load_candles, owner=str(user.id))
+    return recommender.public(job)
+
+
+@router.get("/recommend/{job_id}")
+async def recommend_status(job_id: str, user: CurrentUser) -> dict:
+    job = recommender.get(job_id)
+    if not job or job.get("_owner") != str(user.id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Análise não encontrada (pode ter expirado). Comece de novo.")
+    return recommender.public(job)

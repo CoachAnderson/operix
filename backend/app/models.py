@@ -266,6 +266,11 @@ class Order(Base):
     reason: Mapped[str] = mapped_column(String(255), default="")
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    # Qualidade de execução: preço e momento do sinal × preço e momento da execução.
+    ref_price: Mapped[Decimal | None] = mapped_column(Qty)  # preço de mercado no momento da decisão
+    signal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # fechamento do candle ou disparo do stop
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    trade_fees: Mapped[Decimal | None] = mapped_column(Qty)  # saída: taxas da operação inteira (entrada + saída)
 
 
 class Signal(Base):

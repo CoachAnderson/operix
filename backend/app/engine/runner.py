@@ -67,11 +67,12 @@ async def _emit_signal(db: AsyncSession, bot: Bot, side: Side, price: Decimal, r
 
 
 async def _act(db: AsyncSession, bot: Bot, broker: Broker, side: Side, price: Decimal, reason: str, now: datetime,
-               expires_at: datetime | None = None) -> TickResult:
+               expires_at: datetime | None = None, signal_at: datetime | None = None, ref_price: Decimal | None = None) -> TickResult:
     if bot.exec_mode == ExecMode.signals:
         return await _emit_signal(db, bot, side, price, reason, now, expires_at)
     try:
-        order = await executor.execute(db, bot, broker, side, reason)
+        # Preço e momento do sinal ficam na ordem para medir atraso e escorregamento depois.
+        order = await executor.execute(db, bot, broker, side, reason, ref_price=ref_price or price, signal_at=signal_at or now)
     except executor.ExecutionBlocked as exc:
         return TickResult("blocked", str(exc))
     return TickResult("executed", f"{side.value} {order.status.value}: {reason}")
@@ -164,6 +165,8 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
         await r.set(seen_key, last_open, ex=7 * 86400)
 
         target = decision.target
+        candle_close_at = datetime.fromtimestamp((candles[-1].close_time + 1) / 1000, UTC)
+        candle_close_px = Decimal(str(candles[-1].close))  # referência do sinal (é o preço que o backtest usa)
         if finished and target is None:
             target = "flat"
         entry_note = decision.reason
@@ -185,7 +188,7 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
         closed: TickResult | None = None
         if position:
             close_reason = f"Fim da operação de {bars} candle(s) de {params.timeframe}" if finished else decision.reason
-            result = await _act(db, bot, broker, executor.closing_side(position.side), price, close_reason, now)
+            result = await _act(db, bot, broker, executor.closing_side(position.side), price, close_reason, now, signal_at=candle_close_at, ref_price=candle_close_px)
             if finished and target == "flat" and entry_note != decision.reason:
                 result = TickResult(result.action, f"{result.detail} · {entry_note}")
             if bot.exec_mode == ExecMode.signals and finished and target != "flat" and result.action == "signal":
@@ -221,9 +224,9 @@ async def run_tick(db: AsyncSession, bot: Bot, factory: BrokerFactory = broker_f
             return TickResult("blocked", block)
         side = Side.buy if target == "long" else Side.sell
         if closed:
-            entry = await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry)
+            entry = await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry, signal_at=candle_close_at, ref_price=candle_close_px)
             return TickResult(entry.action, f"{closed.detail} · {entry.detail}")
-        return await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry)
+        return await _act(db, bot, broker, side, price, decision.reason, now, signal_expiry, signal_at=candle_close_at, ref_price=candle_close_px)
     finally:
         await broker.close()
 

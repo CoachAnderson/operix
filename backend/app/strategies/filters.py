@@ -29,6 +29,7 @@ STRATEGY_FAMILY: dict[str, Family] = {
     "donchian_breakout": "trend",
     "rsi_reversion": "reversion",
     "reversao_ams": "reversion",
+    "scalp_media": "reversion",
 }
 
 

@@ -436,6 +436,72 @@ async def bot_chart(bot_id: uuid.UUID, user: CurrentUser, db: DB, limit: int = Q
     }
 
 
+# ---------------- Qualidade de execução ----------------
+def _aware(dt: datetime | None) -> datetime | None:
+    return None if dt is None else (dt if dt.tzinfo else dt.replace(tzinfo=UTC))
+
+
+@router.get("/bots/{bot_id}/execution")
+async def bot_execution(bot_id: uuid.UUID, user: CurrentUser, db: DB, limit: int = Query(300, ge=10, le=1000)) -> dict:
+    """Atraso entre o sinal e a execução, escorregamento e quanto de cada operação foi preço × taxa."""
+    await hit(f"exec:{user.id}", 30, 60)
+    bot = await _get_bot(db, user, bot_id)
+    orders = list(reversed((await db.scalars(
+        select(Order)
+        .where(Order.bot_id == bot.id, Order.price.is_not(None), Order.status.in_([OrderStatus.filled, OrderStatus.partially_filled]))
+        .order_by(Order.created_at.desc())
+        .limit(limit)
+    )).all()))
+
+    delays: list[float] = []
+    slips: list[float] = []
+    slip_cost = Decimal("0")
+    rows = []
+    for o in orders:
+        sig, fil = _aware(o.signal_at), _aware(o.filled_at)
+        delay = (fil - sig).total_seconds() if sig and fil else None
+        slip_pct = None
+        if o.ref_price and o.price:
+            sign = 1 if o.side == Side.buy else -1  # comprar acima ou vender abaixo do preço do sinal = pior
+            slip_pct = float(sign * (o.price - o.ref_price) / o.ref_price * 100)
+            slip_cost += sign * (o.price - o.ref_price) * o.qty
+            slips.append(slip_pct)
+        if delay is not None:
+            delays.append(delay)
+        exit_ = o.realized_pnl is not None
+        gross = (o.realized_pnl + o.trade_fees) if exit_ and o.trade_fees is not None else None
+        rows.append({
+            "at": int(_aware(o.created_at).timestamp() * 1000), "side": o.side.value, "exit": exit_, "reason": o.reason[:120],
+            "ref_price": float(o.ref_price) if o.ref_price else None, "price": float(o.price), "delay_s": delay, "slip_pct": slip_pct,
+            "net": float(o.realized_pnl) if exit_ else None, "fees": float(o.trade_fees) if o.trade_fees is not None else None,
+            "gross": float(gross) if gross is not None else None,
+        })
+
+    exits = [r for r in rows if r["exit"]]
+    known = [r for r in exits if r["gross"] is not None]
+    srt = sorted(delays)
+    quote = "BRL" if bot.market == Market.b3 else (bot.symbol[-4:] if bot.symbol.endswith(("USDT", "USDC")) else bot.symbol[-3:])
+    return {
+        "currency": quote,
+        "orders": len(rows),
+        "measured": len(delays),
+        "delay_avg_s": sum(delays) / len(delays) if delays else None,
+        "delay_p90_s": srt[int(len(srt) * 0.9) - 1] if len(srt) >= 10 else (srt[-1] if srt else None),
+        "delay_max_s": srt[-1] if srt else None,
+        "slip_avg_pct": sum(slips) / len(slips) if slips else None,
+        "slip_cost": float(slip_cost),
+        "trades": len(exits),
+        "trades_with_fees": len(known),
+        "net_total": sum(r["net"] for r in exits),
+        "fees_total": sum(r["fees"] for r in known),
+        "gross_total": sum(r["gross"] for r in known),
+        "wins_net": sum(1 for r in exits if r["net"] > 0),
+        "wins_gross": sum(1 for r in known if r["gross"] > 0),
+        "price_ok_fee_loss": sum(1 for r in known if r["gross"] > 0 and r["net"] <= 0),
+        "rows": rows[-30:][::-1],
+    }
+
+
 # ---------------- Diagnóstico ----------------
 STATUS_TEXT = {
     BotStatus.paused_billing: "Pausado pela assinatura",

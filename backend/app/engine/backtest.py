@@ -46,6 +46,10 @@ class BacktestConfig:
     risk_pct: float | None = None  # tamanho pelo risco: % do saldo perdido se o stop for atingido
     max_leverage: float | None = None  # valor da posição ÷ saldo
     unit_step: float | None = None  # forex/B3: múltiplo de unidades negociável (lote mínimo, 1 contrato)
+    # Martingale (só simulação): após cada perda, a próxima entrada é multiplicada; volta ao tamanho base após um
+    # ganho ou depois de `martingale_levels` dobras perdidas seguidas (ciclo perdido).
+    martingale_mult: float | None = None
+    martingale_levels: int = 3
 
 
 @dataclass
@@ -89,6 +93,11 @@ class Metrics:
     final_balance: float
     long_trades: int = 0
     short_trades: int = 0
+    max_consecutive_wins: int = 0
+    months_total: int = 0
+    months_positive: int = 0
+    months_negative: int = 0
+    breakeven_win_rate_pct: float | None = None  # acerto mínimo para empatar com o ganho e a perda médios
 
 
 @dataclass
@@ -126,6 +135,7 @@ class BacktestResult:
     filtered_entries: int = 0  # entradas que os filtros barraram
     filter_reasons: list[dict] = field(default_factory=list)  # motivos mais comuns
     analysis: dict = field(default_factory=dict)  # acerto de direção, teste estatístico, por padrão e por hora
+    martingale: dict = field(default_factory=dict)  # números do martingale simulado (vazio se desligado)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -182,6 +192,8 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
     pending_tag: str | None = None
     trade_bars = strategy.trade_bars
     tf_ms = flt.TF_MS.get(params.timeframe, 60_000)
+    mg = {"level": 0, "cycle_pnl": 0.0, "max_level": 0, "max_factor": 1.0, "max_notional": 0.0, "cycles_lost": 0,
+          "worst_cycle": 0.0, "cycle_losses": []} if cfg.martingale_mult else None
     if len(candles) <= warmup + 2:
         raise ValueError(
             f"São necessários mais de {warmup + 2} candles para esta estratégia; o período tem {len(candles)}. "
@@ -214,10 +226,13 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
     def open_position(side: str, raw_price: float, when: int, atr_now: float | None = None, tag: str | None = None) -> None:
         nonlocal pos, balance
         price = raw_price * (1 + slip) if side == "long" else raw_price * (1 - slip)
+        factor = cfg.martingale_mult ** mg["level"] if mg else 1.0
         if cfg.order_units is not None:
-            qty = cfg.order_units
+            qty = cfg.order_units * factor
+            if mg and cfg.unit_step and not (cfg.risk_pct or cfg.max_leverage):
+                qty = max(cfg.unit_step, math.floor(qty / cfg.unit_step + 1e-9) * cfg.unit_step)
         else:
-            spend = min(cfg.order_size_quote, balance)
+            spend = min(cfg.order_size_quote * factor, balance)
             if spend <= 0:
                 return
             qty = spend / price
@@ -231,7 +246,7 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
             if cfg.risk_pct:
                 if not stop or balance <= 0:
                     return  # sem stop não dá para dimensionar pelo risco
-                qty = balance * cfg.risk_pct / 100 / abs(price - stop)
+                qty = balance * cfg.risk_pct / 100 / abs(price - stop) * factor
             if cfg.max_leverage:
                 qty = min(qty, max(balance, 0) * cfg.max_leverage / price)
             if spot:
@@ -242,6 +257,10 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
                 return
         entry_fee = qty * price * fee
         balance -= entry_fee
+        if mg:
+            mg["max_level"] = max(mg["max_level"], mg["level"])
+            mg["max_factor"] = max(mg["max_factor"], factor)
+            mg["max_notional"] = max(mg["max_notional"], qty * price)
         pos = _Position(side=side, qty=qty, entry_price=price, entry_time=when, entry_fee=entry_fee, raw_entry=raw_price, tag=tag)
         if f and f.atr_exits and atr_now:
             pos.stop, pos.take = flt.atr_levels(f, side, price, atr_now)  # type: ignore[arg-type]
@@ -274,6 +293,17 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
         day_trades[_day(when)] += 1
         day_pnl[_day(when)] += pnl
         pos = None
+        if mg:
+            mg["cycle_pnl"] += pnl
+            if pnl > 0:
+                mg["level"], mg["cycle_pnl"] = 0, 0.0
+            elif mg["level"] >= cfg.martingale_levels:
+                mg["cycles_lost"] += 1  # perdeu todas as dobras: assume o prejuízo e volta ao tamanho base
+                mg["worst_cycle"] = min(mg["worst_cycle"], mg["cycle_pnl"])
+                mg["cycle_losses"].append(mg["cycle_pnl"])
+                mg["level"], mg["cycle_pnl"] = 0, 0.0
+            else:
+                mg["level"] += 1
 
     for i in range(warmup, len(candles)):
         bar = candles[i]
@@ -382,6 +412,7 @@ def run_backtest(strategy: Strategy, params: StrategyParams, candles: list[Candl
         filtered_entries=filtered,
         filter_reasons=[{"reason": k, "count": v} for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])[:5]],
         analysis=analyze(trades, cfg),
+        martingale=_martingale_summary(mg, cfg, metrics) if mg else {},
     )
 
 
@@ -439,9 +470,15 @@ def _metrics(trades: list[Trade], cfg: BacktestConfig, final: float, equity, max
     losses = [p for p in pnls if p <= 0]
     gross_win, gross_loss = sum(wins), -sum(losses)
     streak = worst_streak = 0
+    wstreak = best_streak = 0
     for p in pnls:
         streak = streak + 1 if p <= 0 else 0
         worst_streak = max(worst_streak, streak)
+        wstreak = wstreak + 1 if p > 0 else 0
+        best_streak = max(best_streak, wstreak)
+    months: dict[str, float] = defaultdict(float)
+    for t in trades:
+        months[_month(t.exit_time)] += t.pnl
     n = len(trades)
     avg_loss = (sum(losses) / len(losses)) if losses else 0.0
     avg_win = (sum(wins) / len(wins)) if wins else 0.0
@@ -469,6 +506,11 @@ def _metrics(trades: list[Trade], cfg: BacktestConfig, final: float, equity, max
         final_balance=final,
         long_trades=sum(1 for t in trades if t.side == "long"),
         short_trades=sum(1 for t in trades if t.side == "short"),
+        max_consecutive_wins=best_streak,
+        months_total=len(months),
+        months_positive=sum(1 for v in months.values() if v > 0),
+        months_negative=sum(1 for v in months.values() if v < 0),
+        breakeven_win_rate_pct=(-avg_loss / (avg_win - avg_loss) * 100) if wins and losses and avg_win - avg_loss > 0 else None,
     )
 
 
@@ -532,6 +574,33 @@ def analyze(trades: list[Trade], cfg: BacktestConfig) -> dict:
         sub = [t for t in trades if t.side == side]
         out[f"{side}_hit_pct"] = _group(sub)["hit_pct"] if sub else None
     return out
+
+
+def _martingale_summary(mg: dict, cfg: BacktestConfig, m: Metrics) -> dict:
+    """Números do martingale. A frequência de ciclos perdidos usa a taxa de perda observada: com perda q por
+    operação, perder todas as N+1 entradas de um ciclo acontece, em média, uma vez a cada 1 / q^(N+1) ciclos."""
+    q = m.losses / m.trades if m.trades else 0.0
+    n = cfg.martingale_levels + 1
+    per_cycle = q**n
+    return {
+        "multiplier": cfg.martingale_mult,
+        "levels": cfg.martingale_levels,
+        "max_level_reached": mg["max_level"],
+        "max_factor": mg["max_factor"],
+        "max_factor_possible": cfg.martingale_mult ** cfg.martingale_levels,
+        "max_notional": mg["max_notional"],
+        "cycles_lost": mg["cycles_lost"],
+        "worst_cycle_loss": mg["worst_cycle"],
+        "loss_rate_pct": q * 100,
+        "losses_to_bust": n,
+        "bust_every_cycles": (1 / per_cycle) if per_cycle > 0 else None,
+        # Perda de um ciclo inteiro em múltiplos da perda de uma entrada de tamanho base: 1 + m + m² + ... + m^N
+        "cycle_loss_in_base_stops": sum(cfg.martingale_mult**k for k in range(n)),
+        # Contando cada ciclo (da 1ª entrada até o ganho ou até perder todas as dobras) como UMA operação,
+        # que é como robôs com martingale costumam divulgar o acerto.
+        "cycles_won": m.wins,
+        "cycle_hit_pct": m.wins / (m.wins + mg["cycles_lost"]) * 100 if (m.wins + mg["cycles_lost"]) else None,
+    }
 
 
 def _downsample(points: list[tuple[int, float, float]]) -> list[tuple[int, float, float]]:

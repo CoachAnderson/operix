@@ -130,6 +130,7 @@ async def apply_fill(db: AsyncSession, bot: Bot, order: Order, fill: Fill, broke
                 broker.settle(gross)
             pnl = gross - fill.fee_quote - entry_fee_part
         order.realized_pnl = pnl
+        order.trade_fees = entry_fee_part + fill.fee_quote  # para separar "resultado do preço" de "taxas"
         position.entry_fee -= entry_fee_part
         position.qty -= sold
         rules = await broker.get_rules(bot.symbol)
@@ -194,7 +195,8 @@ async def plan_entry(bot: Bot, broker: Broker, rules, side: PosSide, always_bala
     return plan, sl, tp, atr_now
 
 
-async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason: str, actor_id: uuid.UUID | None = None) -> Order:
+async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason: str, actor_id: uuid.UUID | None = None,
+                  ref_price: Decimal | None = None, signal_at: datetime | None = None) -> Order:
     ks = await kill_switch_state(db)
     if ks.get("enabled"):
         raise ExecutionBlocked(f"Operações suspensas pela plataforma: {ks.get('reason') or 'manutenção'}")
@@ -234,6 +236,8 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             quote_qty=plan.quote_amount if plan else None,
             status=OrderStatus.new,
             reason=(reason[: 255 - len(note)] + note),
+            ref_price=ref_price,
+            signal_at=signal_at,
         )
         db.add(order)
         await db.commit()  # registra a intenção ANTES de enviar: nada se perde se o processo cair
@@ -265,6 +269,7 @@ async def execute(db: AsyncSession, bot: Bot, broker: Broker, side: Side, reason
             raise
 
         await apply_fill(db, bot, order, fill, broker)
+        order.filled_at = datetime.now(UTC)
         if opening and atr_now and fill.executed_qty > 0:
             # Guarda stop/alvo pelo ATR a partir do preço REAL de entrada; o motor confere a cada ciclo.
             await db.flush()
