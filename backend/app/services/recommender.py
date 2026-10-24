@@ -168,7 +168,8 @@ async def start(symbol: str, days: int, load_candles, owner: str = "") -> dict:
         _jobs[job_id] = job
         return job
     job = {"id": job_id, "status": "running", "symbol": symbol, "days": days, "done": 0, "total": len(combos()),
-           "current": "", "results": [], "started_at": time.time(), "cached": False, "oos_pct": OOS_PCT, "_owner": owner}
+           "current": "", "results": [], "started_at": time.time(), "cached": False, "oos_pct": OOS_PCT, "_owner": owner,
+           "config": {**BASE, **COSTS}}
     _jobs[job_id] = job
 
     async def run() -> None:
