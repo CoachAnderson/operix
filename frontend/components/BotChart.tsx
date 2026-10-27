@@ -22,6 +22,7 @@ interface ChartData {
   orders: ChartOrder[];
   signals: { time: number; side: "BUY" | "SELL"; price: number; status: string }[];
   position: { side: "long" | "short"; avg_price: number; stop: number | null; take: number | null; opened_at: number } | null;
+  lines?: { price: number; kind: "buy" | "sell" | "edge" | "stop" | "avg" | "take" }[];
 }
 
 const fmt = (p: number) => money(p, p < 10 ? 5 : p < 100 ? 4 : 2);
@@ -173,10 +174,35 @@ export function BotChart({ botId, heading }: { botId: string; heading?: React.Re
     lines.current = [];
     const p = data.position;
     levels.current = p ? [p.avg_price, p.stop, p.take].filter((v): v is number => typeof v === "number") : [];
-    if (p) {
+    const ladder = data.lines ?? [];
+    if (p && !ladder.length) {
       lines.current.push(s.createPriceLine({ price: p.avg_price, color: ink, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: p.side === "short" ? "Venda" : "Compra" }));
       if (p.stop) lines.current.push(s.createPriceLine({ price: p.stop, color: loss, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: "Stop" }));
       if (p.take) lines.current.push(s.createPriceLine({ price: p.take, color: gain, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: "Alvo" }));
+    }
+    // Grid e DCA: compras armadas (tracejado), vendas dos lotes (verde), bordas da faixa, médio, alvo e stop.
+    const muted = tokenColor("--muted") || ink;
+    const many = ladder.length > 16;
+    const style: Record<string, { color: string; dash: number; title: string; label: boolean }> = {
+      buy: { color: accent, dash: 2, title: "C", label: !many },
+      sell: { color: gain, dash: 2, title: "V", label: !many },
+      edge: { color: muted, dash: 0, title: "Faixa", label: true },
+      stop: { color: loss, dash: 1, title: "Stop", label: true },
+      avg: { color: ink, dash: 2, title: "Médio", label: true },
+      take: { color: gain, dash: 1, title: "Alvo", label: true },
+    };
+    for (const ln of ladder) {
+      const st = style[ln.kind];
+      lines.current.push(s.createPriceLine({ price: ln.price, color: st.color, lineWidth: 1, lineStyle: st.dash, axisLabelVisible: st.label, title: st.label ? st.title : "" }));
+    }
+    if (ladder.length) {
+      // A escala inclui os níveis mais próximos do preço (e não a faixa inteira, que achataria os candles).
+      const close = data.ohlc[data.ohlc.length - 1][4];
+      levels.current = ladder
+        .filter((l) => l.kind !== "edge")
+        .map((l) => l.price)
+        .sort((a, b) => Math.abs(a - close) - Math.abs(b - close))
+        .slice(0, 4);
     }
     if (!framed.current) {
       framed.current = true; // só na primeira vez: depois respeita o zoom do usuário

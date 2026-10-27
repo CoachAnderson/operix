@@ -6,6 +6,7 @@ import { Suspense, useEffect, useState } from "react";
 import { CandleChart, type OHLC } from "@/components/CandleChart";
 import { EquityChart } from "@/components/EquityChart";
 import { StrategyParamsFields, cleanParams, defaultParams } from "@/components/StrategyParams";
+import { LadderSetup } from "@/components/LadderSetup";
 import { ErrorText, Loading, PageHead, useAction, useApi } from "@/components/ui";
 import { api } from "@/lib/api";
 import { dateTime, money, pnlClass, price, signed } from "@/lib/format";
@@ -87,6 +88,33 @@ interface Result {
   analysis?: Analysis;
   martingale?: MartingaleSummary | Record<string, never>;
   no_martingale?: { metrics: Metrics };
+  ladder?: LadderSummary | Record<string, never>;
+  strategy?: string;
+}
+
+interface LadderSummary {
+  kind: "grid" | "dca";
+  capital: number;
+  skipped_buys: number;
+  open_result_end: number;
+  // grade
+  lower?: number;
+  upper?: number;
+  step_min_pct?: number;
+  rounds?: number;
+  max_lots_held?: number;
+  open_lots_end?: number;
+  below_range_pct?: number;
+  above_range_pct?: number;
+  stopped_at?: number | null;
+  // DCA
+  cycles?: number;
+  avg_orders_per_cycle?: number;
+  max_orders_used?: number;
+  max_orders?: number;
+  longest_cycle_days?: number;
+  open_orders_end?: number;
+  stops?: number;
 }
 
 const PRESETS: [string, number][] = [
@@ -192,6 +220,7 @@ function BacktestView() {
   }, [strategies, strategy]);
 
   const selected = strategies?.find((s) => s.code === strategy);
+  const ladder = selected?.kind === "ladder";
   const forex = form.market === "forex";
   const isB3 = form.market === "b3";
   const margin = form.market !== "crypto";
@@ -234,16 +263,16 @@ function BacktestView() {
       end: form.end,
       initial_balance: Number(form.initial_balance),
       order_size_quote: Number(form.order_size_quote),
-      stop_loss_pct: form.stop_loss_pct ? Number(form.stop_loss_pct) : null,
-      take_profit_pct: form.take_profit_pct ? Number(form.take_profit_pct) : null,
+      stop_loss_pct: !ladder && form.stop_loss_pct ? Number(form.stop_loss_pct) : null,
+      take_profit_pct: !ladder && form.take_profit_pct ? Number(form.take_profit_pct) : null,
       max_daily_loss_quote: form.max_daily_loss_quote ? Number(form.max_daily_loss_quote) : null,
       fee_rate: Number(form.fee_pct) / 100,
       slippage_bps: Number(form.slippage_bps),
-      filters: cleanFilters(filters),
+      filters: ladder ? {} : cleanFilters(filters),
       oos_pct: Number(oos),
-      risk_pct: form.risk_pct ? Number(form.risk_pct) : null,
+      risk_pct: !ladder && form.risk_pct ? Number(form.risk_pct) : null,
       max_leverage: margin && form.max_leverage ? Number(form.max_leverage) : null,
-      martingale_mult: form.martingale ? Number(form.martingale_mult) : null,
+      martingale_mult: !ladder && form.martingale ? Number(form.martingale_mult) : null,
       martingale_levels: Number(form.martingale_levels),
     };
     const res = await action.run(() => api<Result>("/backtest", { json: body }));
@@ -264,8 +293,8 @@ function BacktestView() {
         <form className="form panel" onSubmit={run}>
           <div className="presets" role="group" aria-label="Mercado">
             <button type="button" className="btn" aria-pressed={form.market === "crypto"} onClick={() => chooseMarket("crypto")}>Cripto (Binance)</button>
-            <button type="button" className="btn" aria-pressed={forex} onClick={() => chooseMarket("forex")}>Forex (cTrader)</button>
-            <button type="button" className="btn" aria-pressed={isB3} onClick={() => chooseMarket("b3")}>Futuros B3 (MT5)</button>
+            <button type="button" className="btn" aria-pressed={forex} disabled={ladder} title={ladder ? "Grid e DCA só na Binance à vista" : undefined} onClick={() => chooseMarket("forex")}>Forex (cTrader)</button>
+            <button type="button" className="btn" aria-pressed={isB3} disabled={ladder} title={ladder ? "Grid e DCA só na Binance à vista" : undefined} onClick={() => chooseMarket("b3")}>Futuros B3 (MT5)</button>
           </div>
           {isB3 &&
             (mt5Creds.length ? (
@@ -308,13 +337,17 @@ function BacktestView() {
                 const s = strategies.find((x) => x.code === e.target.value)!;
                 setStrategy(s.code);
                 setParams(defaultParams(s));
+                if (s.kind === "ladder") {
+                  if (form.market !== "crypto") chooseMarket("crypto");
+                  setForm((f) => ({ ...f, order_size_quote: s.code === "dca_spot" ? "100" : "50", initial_balance: "1000" }));
+                }
                 if (s.timeframe === "1m" && (preset === null || preset > 30)) applyPreset(30); // limite do histórico de 1 minuto
               }}
             >
-              {(["day", "swing"] as const).map((style) => (
-                <optgroup key={style} label={style === "day" ? "Day trade" : "Swing trade"}>
+              {(["day", "swing", "ladder"] as const).map((style) => (
+                <optgroup key={style} label={style === "day" ? "Day trade" : style === "swing" ? "Swing trade" : "Em partes (grade e compra programada)"}>
                   {strategies
-                    .filter((s) => s.style === style)
+                    .filter((s) => (style === "ladder" ? s.kind === "ladder" : s.kind !== "ladder" && s.style === style))
                     .map((s) => (
                       <option key={s.code} value={s.code}>
                         {s.name}
@@ -325,6 +358,9 @@ function BacktestView() {
             </select>
           </label>
           {selected && <StrategyParamsFields strategy={selected} params={params} onChange={setParams} />}
+          {selected && ladder && (
+            <LadderSetup code={selected.code} params={params} size={Number(form.order_size_quote) || 0} balance={Number(form.initial_balance)} symbol={form.symbol} />
+          )}
           {selected?.trade_bars && (
             <p className="notice small">
               Cada operação dura {selected.trade_bars} candle: entra na abertura e sai no fechamento. Candles de 1 minuto: o teste aceita até 32 dias. Em cripto à
@@ -388,10 +424,11 @@ function BacktestView() {
               </label>
             ) : (
               <label>
-                Valor por ordem
+                {ladder ? (selected?.code === "grade_spot" ? "Valor de cada lote" : "Valor da 1ª compra") : "Valor por ordem"}
                 <input type="number" min="1" step="any" required value={form.order_size_quote} onChange={set("order_size_quote")} />
               </label>
             )}
+            {!ladder && (<>
             <label>
               Stop loss (%)
               <input type="number" min="0.1" max="50" step="any" value={form.stop_loss_pct} onChange={set("stop_loss_pct")} />
@@ -412,8 +449,9 @@ function BacktestView() {
               Alvo de lucro (%)
               <input type="number" min="0.1" max="500" step="any" value={form.take_profit_pct} onChange={set("take_profit_pct")} />
             </label>
+            </>)}
           </div>
-          {selected && (
+          {selected && !ladder && (
             <FiltersFields value={filters} onChange={setFilters} timeframe={params.timeframe || selected.timeframe} family={selected.family} />
           )}
           <label>
@@ -444,7 +482,7 @@ function BacktestView() {
               </label>
             </div>
           </details>
-          <details>
+          {!ladder && <details>
             <summary>Martingale (simulação)</summary>
             <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
               <label className="check">
@@ -480,7 +518,7 @@ function BacktestView() {
                 ao tamanho normal.
               </p>
             </div>
-          </details>
+          </details>}
           <ErrorText>{action.error}</ErrorText>
           <button className="btn btn-primary" disabled={action.busy || !strategy}>
             {action.busy ? "Baixando histórico e simulando…" : "Rodar backtest"}
@@ -504,6 +542,65 @@ function BacktestView() {
         </section>
       )}
     </>
+  );
+}
+
+function LadderResult({ l, m, unit }: { l: LadderSummary; m: Metrics; unit: string }) {
+  const px = (v?: number) => (v === undefined ? "—" : money(v, v >= 100 ? 2 : v >= 1 ? 4 : 8));
+  return (
+    <div className="panel" style={{ display: "grid", gap: 10 }}>
+      <h2>{l.kind === "grid" ? "Como a grade se saiu" : "Como os ciclos se saíram"}</h2>
+      <dl className="figures" style={{ margin: 0 }}>
+        {l.kind === "grid" ? (
+          <>
+            <div>
+              <dt>Vendas com lucro de grade</dt>
+              <dd>{l.rounds}</dd>
+              <span className="muted small">faixa {px(l.lower)} a {px(l.upper)}, {money(l.step_min_pct, 2)}% por grade</span>
+            </div>
+            <div>
+              <dt>Máximo de lotes ao mesmo tempo</dt>
+              <dd>{l.max_lots_held}</dd>
+              <span className="muted small">no fim: {l.open_lots_end} lote(s)</span>
+            </div>
+            <div>
+              <dt>Tempo fora da faixa</dt>
+              <dd className={(l.below_range_pct ?? 0) > 25 ? "loss" : ""}>{money((l.below_range_pct ?? 0) + (l.above_range_pct ?? 0), 0)}%</dd>
+              <span className="muted small">{money(l.below_range_pct, 0)}% abaixo · {money(l.above_range_pct, 0)}% acima</span>
+            </div>
+          </>
+        ) : (
+          <>
+            <div>
+              <dt>Ciclos concluídos</dt>
+              <dd>{l.cycles}</dd>
+              <span className="muted small">média de {money(l.avg_orders_per_cycle, 1)} compras por ciclo{l.stops ? ` · ${l.stops} no stop` : ""}</span>
+            </div>
+            <div>
+              <dt>Mais compras num ciclo</dt>
+              <dd className={(l.max_orders_used ?? 0) >= (l.max_orders ?? 99) ? "warn-text" : ""}>
+                {l.max_orders_used} de {l.max_orders}
+              </dd>
+              <span className="muted small">ciclo mais longo: {money(l.longest_cycle_days, 1)} dia(s)</span>
+            </div>
+          </>
+        )}
+        <div>
+          <dt>Dinheiro necessário</dt>
+          <dd>{money(l.capital)}{unit}</dd>
+          <span className="muted small">{l.skipped_buys ? `${l.skipped_buys} compra(s) sem saldo` : "o saldo cobriu todas as compras"}</span>
+        </div>
+        <div>
+          <dt>Queda máxima do patrimônio</dt>
+          <dd className="loss">−{money(m.max_drawdown_pct, 1)}%</dd>
+          <span className="muted small">inclui os lotes comprados ainda não vendidos</span>
+        </div>
+      </dl>
+      <p className="muted small" style={{ margin: 0 }}>
+        Cada operação do relatório é um lote completo{l.kind === "grid" ? " (compra numa grade e venda na de cima)" : " (o ciclo inteiro, da 1ª compra à venda)"}. O acerto
+        costuma ser alto: o risco está nos lotes presos numa queda, que aparecem na queda máxima do patrimônio.
+      </p>
+    </div>
   );
 }
 
@@ -545,6 +642,7 @@ function ResultView({ r }: { r: Result }) {
         )}
       </p>
 
+      {r.ladder && "kind" in r.ladder && <LadderResult l={r.ladder as LadderSummary} m={m} unit={unit} />}
       {m.trades > 0 && <PeriodStats m={m} pre={pre} />}
       {r.martingale && "multiplier" in r.martingale && r.no_martingale && (
         <MartingaleCompare withMg={m} without={r.no_martingale.metrics} mg={r.martingale as MartingaleSummary} pre={pre} />

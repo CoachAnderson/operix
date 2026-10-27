@@ -39,6 +39,19 @@ function SubscriptionView() {
   const current = sub.data;
   const active = current?.status === "active";
 
+  if (current?.source === "admin") {
+    return (
+      <>
+        <PageHead title="Assinatura" />
+        <div className="notice">
+          <strong>Acesso ilimitado de administrador</strong>
+          Sua conta é de administrador: todos os robôs e recursos liberados, sem limite de robôs e sem cobrança.
+        </div>
+      </>
+    );
+  }
+  const manual = active && current?.source === "manual";
+
   return (
     <>
       <PageHead title="Assinatura" lead="Cobrança mensal pelo Mercado Pago. Cancele quando quiser." />
@@ -54,7 +67,11 @@ function SubscriptionView() {
         <dl className="figures" style={{ marginBottom: 32 }}>
           <div><dt>Plano</dt><dd>{current.plan.name}</dd></div>
           <div><dt>Situação</dt><dd className={active ? "gain" : current.status === "past_due" ? "loss" : ""}>{STATUS[current.status]}</dd></div>
-          <div><dt>Próxima cobrança</dt><dd>{date(current.next_payment_at)}</dd></div>
+          {manual ? (
+            <div><dt>Liberado pela administração</dt><dd>{current.expires_at ? `até ${date(current.expires_at)}` : "sem prazo"}</dd></div>
+          ) : (
+            <div><dt>Próxima cobrança</dt><dd>{date(current.next_payment_at)}</dd></div>
+          )}
         </dl>
       )}
       <ErrorText>{action.error}</ErrorText>
@@ -64,7 +81,12 @@ function SubscriptionView() {
       ) : (
         <Loading />
       )}
-      {active && (
+      {manual && (
+        <p className="muted small" style={{ marginTop: 16 }}>
+          Seu acesso foi liberado pela administração, sem cobrança. Se assinar um plano, a cobrança começa a valer quando o pagamento for confirmado.
+        </p>
+      )}
+      {active && !manual && (
         <p className="muted small" style={{ marginTop: 16 }}>
           Ao mudar de plano, a assinatura atual é cancelada assim que a nova for confirmada.{" "}
           <button className="btn btn-quiet loss" onClick={cancel} disabled={action.busy}>Cancelar assinatura</button>

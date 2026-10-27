@@ -14,6 +14,14 @@ export interface User {
   created_at: string;
   last_login_at?: string | null;
   appearance?: Record<string, unknown> | null;
+  access?: Access | null;
+}
+
+export interface Access {
+  source: "admin" | "mercadopago" | "manual" | "none";
+  plan_name: string | null;
+  expires_at: string | null;
+  subscription_id: string | null;
 }
 
 export interface Plan {
@@ -34,6 +42,8 @@ export interface Subscription {
   plan: Plan;
   next_payment_at: string | null;
   created_at: string;
+  expires_at?: string | null;
+  source?: "mercadopago" | "manual" | "admin";
 }
 
 export interface Credential {
@@ -129,6 +139,7 @@ export interface StrategyInfo {
   trade_bars?: number | null;
   suggested_max_trades_per_day?: number | null;
   notes?: string[];
+  kind?: "signal" | "ladder";
 }
 
 export interface ReportSymbol {

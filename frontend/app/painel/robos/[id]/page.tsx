@@ -14,6 +14,9 @@ import { B3_POINT_VALUE, MODE_LABEL, dateTime, money, pnlClass, price, qty, sign
 import type { BotFilters, BotSummary, Credential, Order, SizingPreview, StrategyInfo, Venue } from "@/lib/types";
 import { FiltersFields, activeFilters, cleanFilters } from "@/components/FiltersFields";
 import { PreviewCard } from "@/components/SizingPreview";
+import { LadderStatus } from "@/components/LadderStatus";
+import { StrategyParamsFields, cleanParams } from "@/components/StrategyParams";
+import { ladderCapital } from "@/lib/ladder";
 
 export default function BotDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -26,6 +29,7 @@ export default function BotDetailPage() {
   const preview = useApi<SizingPreview>(`/bots/${id}/sizing-preview`);
   const action = useAction();
   const [edit, setEdit] = useState<Record<string, string> | null>(null);
+  const [editParams, setEditParams] = useState<Record<string, string>>({});
   const [chartView, setChartView] = useState<"robo" | "tv">("robo");
 
   useEffect(() => {
@@ -56,6 +60,7 @@ export default function BotDetailPage() {
 
   function startEdit() {
     setEditFilters(b.filters ?? {});
+    setEditParams(Object.fromEntries(Object.entries(b.params).map(([k, v]) => [k, String(v)])));
     setEdit({
       exec_mode: b.exec_mode,
       venue: b.venue,
@@ -77,7 +82,13 @@ export default function BotDetailPage() {
     e.preventDefault();
     if (!edit) return;
     if (edit.venue === "live" && b.venue !== "live" && !window.confirm("Passar este robô para a CONTA REAL? As próximas ordens usarão o dinheiro da sua conta na corretora.")) return;
-    const body = {
+    const body = ladder ? {
+      exec_mode: "auto",
+      venue: edit.venue,
+      credential_id: edit.venue === "paper" ? null : edit.credential_id || null,
+      order_size_quote: edit.order_size_quote,
+      params: cleanParams(editParams),
+    } : {
       exec_mode: edit.exec_mode,
       venue: edit.venue,
       credential_id: edit.venue === "paper" && !margin ? null : edit.credential_id || null,
@@ -105,6 +116,9 @@ export default function BotDetailPage() {
   const exchange = { crypto: "binance", forex: "ctrader", b3: "mt5" }[b.market];
   const lotsLabel = isB3 ? "Contratos por ordem" : "Lotes por ordem";
   const sign = s.position?.side === "short" ? -1 : 1;
+  const strat = strategies?.find((x) => x.code === b.strategy);
+  const ladder = strat?.kind === "ladder";
+  const quoteCur = ["USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH"].find((x) => b.symbol.endsWith(x)) ?? "";
 
   return (
     <>
@@ -130,8 +144,20 @@ export default function BotDetailPage() {
               </button>
             )}
             {s.position && (
-              <button className="btn btn-danger" disabled={action.busy} onClick={() => act("/close-position", "POST", "Vender toda a posição agora, a preço de mercado?")}>
-                Encerrar posição
+              <button
+                className="btn btn-danger"
+                disabled={action.busy}
+                onClick={() =>
+                  act(
+                    "/close-position",
+                    "POST",
+                    ladder
+                      ? "Vender todos os lotes agora, a preço de mercado? O robô para e, quando for ligado de novo, monta outra grade/ciclo do zero."
+                      : "Vender toda a posição agora, a preço de mercado?",
+                  )
+                }
+              >
+                {ladder ? "Vender todos os lotes" : "Encerrar posição"}
               </button>
             )}
           </div>
@@ -161,7 +187,7 @@ export default function BotDetailPage() {
         </div>
         <div>
           <dt>Ordens hoje</dt>
-          <dd>{s.trades_today} de {b.max_trades_per_day}</dd>
+          <dd>{ladder ? s.trades_today : `${s.trades_today} de ${b.max_trades_per_day}`}</dd>
         </div>
         {b.venue === "paper" && (
           <div>
@@ -194,6 +220,12 @@ export default function BotDetailPage() {
         })()}
       </section>
 
+      {ladder && (
+        <section className="section">
+          <LadderStatus botId={b.id} quote={quoteCur} />
+        </section>
+      )}
+
       <section className="section">
         <BotDiagnostics botId={b.id} />
       </section>
@@ -204,7 +236,12 @@ export default function BotDetailPage() {
 
       <section className="section">
         <h2>Posição</h2>
-        {s.position ? (
+        {s.position && ladder ? (
+          <p>
+            Todos os lotes somados: {qty(s.position.qty)} a {price(s.position.avg_price)} em média, desde {dateTime(s.position.opened_at)}. Cada lote é vendido no
+            seu próprio nível; veja {b.strategy === "grade_spot" ? "a grade" : "o ciclo"} acima.
+          </p>
+        ) : s.position ? (
           <p>
             {s.position.side === "short" ? "Vendido" : "Comprado"} em{" "}
             {isB3 ? `${qty(Number(s.position.qty) / (B3_POINT_VALUE[b.symbol] ?? 1))} contrato(s) de ${b.symbol}` : `${qty(s.position.qty)}${forex ? " unidades" : ""}`} a {price(s.position.avg_price)}, desde{" "}
@@ -228,7 +265,28 @@ export default function BotDetailPage() {
           <h2>Configuração</h2>
           {!edit && <button className="btn" onClick={startEdit}>Ajustar</button>}
         </div>
-        {!edit ? (
+        {!edit && ladder ? (
+          <dl className="figures">
+            <div>
+              <dt>{b.strategy === "grade_spot" ? "Valor de cada lote" : "Valor da 1ª compra"}</dt>
+              <dd style={{ fontSize: "1.1rem" }}>{money(b.order_size_quote)} {quoteCur}</dd>
+            </div>
+            <div>
+              <dt>Dinheiro necessário</dt>
+              <dd style={{ fontSize: "1.1rem" }}>
+                {money(ladderCapital(b.strategy, Object.fromEntries(Object.entries(b.params).map(([k, v]) => [k, String(v)])), Number(b.order_size_quote)))} {quoteCur}
+              </dd>
+            </div>
+            <div>
+              <dt>Parâmetros</dt>
+              <dd style={{ fontSize: "0.95rem", fontWeight: 500 }}>
+                {b.strategy === "grade_spot"
+                  ? `${b.params.grids} grades, ${b.params.range_mode === "manual" ? `de ${b.params.lower_price} a ${b.params.upper_price}` : `${b.params.lower_pct ?? 10}% abaixo e ${b.params.upper_pct ?? 10}% acima da partida`}${b.params.stop_below_pct ? `, stop ${b.params.stop_below_pct}% abaixo do piso` : ""}`
+                  : `${b.params.max_orders} compras ${b.params.trigger === "time" ? `a cada ${b.params.interval_hours} h` : `a partir de ${b.params.deviation_pct}% de queda`}, alvo ${b.params.take_profit_pct}%${b.params.stop_loss_pct ? `, stop ${b.params.stop_loss_pct}%` : ""}${b.params.restart === false ? ", um ciclo só" : ""}`}
+              </dd>
+            </div>
+          </dl>
+        ) : !edit ? (
           <dl className="figures">
             <div>
               <dt>{b.sizing_mode === "risk" ? "Tamanho" : margin ? lotsLabel : "Valor por ordem"}</dt>
@@ -255,10 +313,46 @@ export default function BotDetailPage() {
             </div>
           </dl>
         ) : null}
-        {!edit ? (
+        {!edit && ladder ? null : !edit ? (
           <div style={{ marginTop: 12 }}>
             <PreviewCard data={preview.data} loading={preview.loading} />
           </div>
+        ) : ladder && strat ? (
+          <form className="form panel" onSubmit={saveEdit} style={{ maxWidth: 720 }}>
+            <p className="muted small" style={{ margin: 0 }}>
+              Para mudar a grade, o valor dos lotes ou o ambiente, pare o robô e venda os lotes antes. A {b.strategy === "grade_spot" ? "grade" : "contagem do ciclo"} recomeça do zero.
+            </p>
+            <div className="grid-2">
+              <label>
+                Ambiente
+                <select value={edit.venue} onChange={(e) => setEdit({ ...edit, venue: e.target.value, credential_id: "" })}>
+                  {(["paper", "testnet", "live"] as Venue[]).map((v) => (
+                    <option key={v} value={v}>{venueLabel(v, b.market)}</option>
+                  ))}
+                </select>
+              </label>
+              {edit.venue !== "paper" && (
+                <label>
+                  Credencial
+                  <select required value={edit.credential_id} onChange={(e) => setEdit({ ...edit, credential_id: e.target.value })}>
+                    <option value="">Escolha…</option>
+                    {creds?.filter((c) => c.exchange === "binance" && c.venue === edit.venue).map((c) => (
+                      <option key={c.id} value={c.id}>{c.label} (final {c.key_last4})</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label>
+                {b.strategy === "grade_spot" ? "Valor de cada lote" : "Valor da 1ª compra"}
+                <input type="number" min="10" step="any" required value={edit.order_size_quote} onChange={(e) => setEdit({ ...edit, order_size_quote: e.target.value })} />
+              </label>
+            </div>
+            <StrategyParamsFields strategy={strat} params={editParams} onChange={setEditParams} />
+            <div className="actions">
+              <button className="btn btn-primary" disabled={action.busy}>Salvar ajustes</button>
+              <button type="button" className="btn btn-quiet" onClick={() => setEdit(null)}>Cancelar</button>
+            </div>
+          </form>
         ) : (
           <form className="form panel" onSubmit={saveEdit} style={{ maxWidth: 720 }}>
             <div className="grid-2">

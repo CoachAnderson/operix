@@ -31,6 +31,8 @@ interface Row {
   confirm?: Seg | null;
   start?: number;
   end?: number;
+  kind?: "signal" | "ladder";
+  order_size_quote?: number;
 }
 interface Job {
   id: string;
@@ -104,7 +106,9 @@ export default function RecommendPage() {
   const link = (r: Row, base: string) => `${base}?simbolo=${job?.symbol}&estrategia=${r.strategy}&tf=${r.timeframe}`;
   const cfg = job?.config;
   const robotLink = (r: Row) =>
-    `${link(r, "/painel/robos/novo")}&de=recomendacao&stop=${cfg?.stop_loss_pct ?? 2}&alvo=${cfg?.take_profit_pct ?? 4}&valor=${cfg?.order_size_quote ?? 100}&saldo=${cfg?.initial_balance ?? 1000}`;
+    r.kind === "ladder"
+      ? `${link(r, "/painel/robos/novo")}&de=recomendacao&valor=${r.order_size_quote ?? 50}&saldo=${cfg?.initial_balance ?? 1000}`
+      : `${link(r, "/painel/robos/novo")}&de=recomendacao&stop=${cfg?.stop_loss_pct ?? 2}&alvo=${cfg?.take_profit_pct ?? 4}&valor=${cfg?.order_size_quote ?? 100}&saldo=${cfg?.initial_balance ?? 1000}`;
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
@@ -131,8 +135,8 @@ export default function RecommendPage() {
         </button>
       </form>
       <p className="muted small" style={{ maxWidth: 720 }}>
-        Cada combinação é testada só comprada (mercado à vista), com 0,1% de taxa por lado e 0,05% de escorregamento, stop de 2% e alvo de 4%. Os últimos 30%
-        do período ficam para confirmação. Gráficos de 1 e 5 minutos usam no máximo 30 e 100 dias de histórico.
+        Cada combinação é testada só comprada (mercado à vista), com 0,1% de taxa por lado e 0,05% de escorregamento, stop de 2% e alvo de 4%. Grid e
+        compra programada usam as próprias regras (parâmetros padrão), com lotes que cabem no saldo de 1.000. Os últimos 30% do período ficam para confirmação. Gráficos de 1 e 5 minutos usam no máximo 30 e 100 dias de histórico.
       </p>
 
       {error && <p className="loss">{error}</p>}

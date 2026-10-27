@@ -13,6 +13,7 @@ import { STRATEGY_LESSON } from "@/lib/learn/lessons";
 import { FiltersFields, cleanFilters } from "@/components/FiltersFields";
 import { LiveSizingPreview } from "@/components/SizingPreview";
 import type { BotFilters } from "@/lib/types";
+import { LadderSetup } from "@/components/LadderSetup";
 
 /** O que muda na tela conforme o mercado. */
 const MARKETS: Record<
@@ -117,6 +118,7 @@ export default function NewBotPage() {
     const qs = q.get("simbolo");
     const symbol = qs && /^[A-Z0-9]{5,20}$/.test(qs) ? qs : form.symbol;
     const allowAuto = sub?.status === "active" && sub.plan.allow_auto;
+    const isLadder = pick.kind === "ladder";
     setForm((f) => ({
       ...f,
       market: "crypto",
@@ -127,16 +129,19 @@ export default function NewBotPage() {
       sizing_mode: "fixed",
       order_size_quote: num("valor", "100"),
       paper_quote_balance: num("saldo", "1000"),
-      stop_loss_pct: num("stop", "2"),
-      take_profit_pct: num("alvo", "4"),
+      stop_loss_pct: isLadder ? "" : num("stop", "2"),
+      take_profit_pct: isLadder ? "" : num("alvo", "4"),
       max_trades_per_day: String(pick.suggested_max_trades_per_day ?? 20),
       symbol,
       name: `${pick.name} · ${symbol}${okTf ? ` ${okTf}` : ""}`.slice(0, 80),
     }));
     const quote = ["USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH"].find((x) => symbol.endsWith(x)) ?? "";
     setFromTest(
-      `${pick.name}${okTf ? ` em ${okTf}` : ""} no ${symbol}, simulação com saldo fictício de ${num("saldo", "1000")} ${quote}, ${num("valor", "100")} ${quote} por ordem, stop de ${num("stop", "2")}% e alvo de ${num("alvo", "4")}%` +
-        (allowAuto ? ", modo automático." : ". Seu plano não inclui o modo automático, então o robô começa no modo sinais."),
+      isLadder
+        ? `${pick.name} no ${symbol}, simulação com saldo fictício de ${num("saldo", "1000")} ${quote} e ${num("valor", "100")} ${quote} por lote, com os parâmetros padrão testados` +
+            (allowAuto ? ", modo automático." : ". Atenção: seu plano não inclui o modo automático, que este robô exige.")
+        : `${pick.name}${okTf ? ` em ${okTf}` : ""} no ${symbol}, simulação com saldo fictício de ${num("saldo", "1000")} ${quote}, ${num("valor", "100")} ${quote} por ordem, stop de ${num("stop", "2")}% e alvo de ${num("alvo", "4")}%` +
+            (allowAuto ? ", modo automático." : ". Seu plano não inclui o modo automático, então o robô começa no modo sinais."),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategies, subLoading]);
@@ -146,6 +151,7 @@ export default function NewBotPage() {
   const b3 = form.market === "b3";
   const margin = form.market !== "crypto"; // forex e B3: lotes/contratos, comprado e vendido
   const selected = strategies?.find((s) => s.code === strategy);
+  const ladder = selected?.kind === "ladder";
   const plan = sub?.status === "active" ? sub.plan : null;
   // Forex e B3 na simulação usam qualquer conexão do cliente (para cotações); nos demais, a do ambiente.
   const venueCreds = useMemo(
@@ -157,10 +163,16 @@ export default function NewBotPage() {
   function chooseStrategy(s: StrategyInfo) {
     setStrategy(s.code);
     setParams(defaultParams(s));
+    const isLadder = s.kind === "ladder";
     setForm((f) => ({
       ...f,
       name: f.name || s.name,
       max_trades_per_day: s.suggested_max_trades_per_day ? String(s.suggested_max_trades_per_day) : f.max_trades_per_day,
+      // Grid e DCA: Binance à vista, automático, valor fixo por lote
+      ...(isLadder
+        ? { market: "crypto" as Market, symbol: f.market === "crypto" ? f.symbol : "BTCUSDT", allow_short: false, credential_id: f.market === "crypto" ? f.credential_id : "",
+            exec_mode: "auto" as ExecMode, sizing_mode: "fixed" as const, order_size_quote: s.code === "dca_spot" ? "100" : "50", paper_quote_balance: "1000" }
+        : {}),
     }));
   }
 
@@ -196,14 +208,14 @@ export default function NewBotPage() {
       credential_id: needsCred ? form.credential_id || null : null,
       order_size_quote: margin ? null : form.order_size_quote,
       order_lots: margin ? form.order_lots : null,
-      stop_loss_pct: form.stop_loss_pct || null,
-      take_profit_pct: form.take_profit_pct || null,
+      stop_loss_pct: ladder ? null : form.stop_loss_pct || null,
+      take_profit_pct: ladder ? null : form.take_profit_pct || null,
       max_daily_loss_quote: form.max_daily_loss_quote || null,
       max_trades_per_day: Number(form.max_trades_per_day),
       paper_quote_balance: form.paper_quote_balance,
-      filters: cleanFilters(filters),
-      sizing_mode: form.sizing_mode,
-      risk_pct: form.sizing_mode === "risk" ? form.risk_pct || null : null,
+      filters: ladder ? {} : cleanFilters(filters),
+      sizing_mode: ladder ? "fixed" : form.sizing_mode,
+      risk_pct: !ladder && form.sizing_mode === "risk" ? form.risk_pct || null : null,
       max_leverage: form.max_leverage || null,
     };
   }
@@ -252,9 +264,9 @@ export default function NewBotPage() {
           <div className="choice">
             {(Object.keys(MARKETS) as Market[]).map((key) => (
               <label key={key}>
-                <input type="radio" name="market" checked={form.market === key} onChange={() => chooseMarket(key)} />
+                <input type="radio" name="market" checked={form.market === key} disabled={ladder && key !== "crypto"} onChange={() => chooseMarket(key)} />
                 {MARKETS[key].label}
-                <span className="hint">{MARKETS[key].hint}</span>
+                <span className="hint">{ladder && key !== "crypto" ? "Grid e DCA só na Binance à vista." : MARKETS[key].hint}</span>
               </label>
             ))}
           </div>
@@ -262,12 +274,14 @@ export default function NewBotPage() {
 
         <fieldset>
           <legend>Estratégia</legend>
-          {(["day", "swing"] as const).map((style) => (
+          {(["day", "swing", "ladder"] as const).map((style) => (
             <div key={style} style={{ display: "grid", gap: 8 }}>
-              <span className="muted small">{style === "day" ? "Day trade: fecha no mesmo dia" : "Swing trade: segura por dias"}</span>
+              <span className="muted small">
+                {style === "day" ? "Day trade: fecha no mesmo dia" : style === "swing" ? "Swing trade: segura por dias" : "Em partes (Binance à vista): compra e vende vários lotes"}
+              </span>
               <div className="choice">
                 {strategies
-                  .filter((s) => s.style === style)
+                  .filter((s) => (style === "ladder" ? s.kind === "ladder" : s.kind !== "ladder" && s.style === style))
                   .map((s) => (
                     <label key={s.code}>
                       <input type="radio" name="strategy" checked={strategy === s.code} onChange={() => chooseStrategy(s)} required />
@@ -304,7 +318,7 @@ export default function NewBotPage() {
           </fieldset>
         )}
 
-        {selected && (
+        {selected && !ladder && (
           <FiltersFields value={filters} onChange={setFilters} timeframe={params.timeframe || selected.timeframe} family={selected.family} />
         )}
 
@@ -359,6 +373,21 @@ export default function NewBotPage() {
           </fieldset>
         )}
 
+        {ladder ? (
+          <fieldset>
+            <legend>Modalidade</legend>
+            {plan.allow_auto ? (
+              <p className="small" style={{ margin: 0 }}>
+                <strong>Automático.</strong> {selected?.name} envia as ordens sozinho: no modo sinais seriam dezenas de confirmações por dia.
+              </p>
+            ) : (
+              <p className="notice notice-danger small" style={{ margin: 0 }}>
+                <strong>Plano {plan.name} sem modo automático</strong>
+                {selected?.name} só funciona no automático. <Link href="/painel/assinatura">Veja os planos</Link>.
+              </p>
+            )}
+          </fieldset>
+        ) : (
         <fieldset>
           <legend>Modalidade</legend>
           <div className="choice">
@@ -374,6 +403,7 @@ export default function NewBotPage() {
             </label>
           </div>
         </fieldset>
+        )}
 
         <fieldset>
           <legend>Onde operar</legend>
@@ -443,6 +473,31 @@ export default function NewBotPage() {
           )}
         </fieldset>
 
+        {ladder && selected ? (
+          <fieldset>
+            <legend>Valor dos lotes</legend>
+            <div className="grid-2">
+              <label>
+                {selected.code === "grade_spot" ? "Valor de cada lote" : "Valor da 1ª compra"} ({["USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH"].find((x) => form.symbol.toUpperCase().endsWith(x)) ?? "moeda de cotação"})
+                <span className="hint">{selected.code === "grade_spot" ? "Cada grade compra e vende um lote deste valor." : "As compras seguintes usam este valor × o multiplicador."} Mínimo 10.</span>
+                <input type="number" required min="10" step="any" value={form.order_size_quote} onChange={set("order_size_quote")} />
+              </label>
+            </div>
+            <LadderSetup
+              code={selected.code}
+              params={params}
+              size={Number(form.order_size_quote) || 0}
+              balance={form.venue === "paper" ? Number(form.paper_quote_balance) : null}
+              symbol={form.symbol}
+              quote={["USDT", "USDC", "FDUSD", "BRL", "BTC", "ETH"].find((x) => form.symbol.toUpperCase().endsWith(x)) ?? ""}
+            />
+            {form.venue !== "paper" && (
+              <p className="muted small" style={{ margin: 0 }}>
+                Deixe na sua conta da Binance pelo menos o dinheiro necessário, livre. Compras que não couberem no saldo são recusadas e o robô tenta de novo depois.
+              </p>
+            )}
+          </fieldset>
+        ) : (
         <fieldset>
           <legend>Tamanho e limites de risco</legend>
           <div className="choice">
@@ -523,6 +578,7 @@ export default function NewBotPage() {
           )}
           <LiveSizingPreview body={buildBody()} enabled={!!strategy && (!needsCred || !!form.credential_id)} />
         </fieldset>
+        )}
 
         <ErrorText>{error}</ErrorText>
         <div className="actions">
